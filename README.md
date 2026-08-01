@@ -74,7 +74,7 @@ Stated plainly, because the crate table above reads like more than there is.
 | **The entire order path** | `AccountEvent` has no producer and no `TradingVenue` is implemented. The core streams market data and nothing else — it cannot place, amend or cancel anything |
 | **Priority separation in the fanout** | One `broadcast` of 8 192 carries everything. When executions start flowing they will queue behind book deltas, and the fix is much cheaper before that happens than after |
 | **Persistence** | Nothing is written to disk. Restarting the core loses the tape, the candles and the read-model |
-| **Envelopes and channels** | `wire::frame` carries bytes correctly, but the messages inside are still the flat `ClientMsg`/`ServerMsg` pair. Channels, request ids and acknowledgements arrive with roadmap tasks 1.3–1.8 |
+| **The message catalogue** | `wire::envelope` routes by channel and skips what it does not understand, but `ClientMsg`/`ServerMsg` still hold only the handful of messages from before the protocol work. The full command and event catalogues, batching, idempotency and `CommandAck` arrive with roadmap tasks 1.4–1.8 |
 | **`std::mem::forget` in `main.rs`** | Connectors are leaked deliberately to keep their socket tasks alive. It works, but it means the core has no clean shutdown path |
 
 Closed since this section was written: TLS on the wire (`wss://` with rustls, and the core
@@ -165,7 +165,7 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace                 # 183 tests
+cargo test --workspace                 # 198 tests
 cargo clippy --workspace --all-targets
 
 cd crates/terminal && cargo test       # 41 more, separate workspace

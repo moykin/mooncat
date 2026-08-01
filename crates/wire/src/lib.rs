@@ -15,10 +15,15 @@
 use serde::{Deserialize, Serialize};
 
 pub mod codec;
+pub mod envelope;
 pub mod frame;
 pub mod session;
 
 pub use codec::{decode_client, decode_server, encode, CodecError, MAX_FRAME_BYTES};
+pub use envelope::{
+    accept_client, accept_server, Channel, ClientEnvelope, Incoming, ReqId, ServerEnvelope, SkipCounters,
+    Skipped, SymbolId, KNOWN_VER,
+};
 pub use frame::{Direction, Frame};
 pub use session::{Auth, Session};
 
@@ -27,7 +32,11 @@ pub use session::{Auth, Session};
 pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Terminal → core.
+///
+/// Adjacently tagged: the tag is what lets an unrecognised message be captured whole rather
+/// than becoming a decode error. See `tests/spike_forward_compat.rs`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", content = "d", rename_all = "snake_case")]
 pub enum ClientMsg {
     /// Always the first message. Anything before it is refused.
     Hello {
@@ -42,6 +51,7 @@ pub enum ClientMsg {
 
 /// Core → terminal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", content = "d", rename_all = "snake_case")]
 pub enum ServerMsg {
     /// Hello accepted.
     Welcome {
