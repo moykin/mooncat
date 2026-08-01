@@ -20,6 +20,7 @@ pub mod command;
 pub mod envelope;
 pub mod event;
 pub mod frame;
+pub mod idempotency;
 pub mod session;
 
 pub use batch::{Batch, Batcher, FlushReason};
@@ -31,6 +32,7 @@ pub use envelope::{
 };
 pub use event::{AckCode, AckDetail, AckStatus, ServerEvent};
 pub use frame::{Direction, Frame};
+pub use idempotency::{Admission, ReqRing, SEEN_REQ_CAPACITY};
 pub use session::{Auth, Session};
 
 /// Bumped whenever a message changes shape. Mismatched peers are rejected at Hello rather
