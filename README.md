@@ -165,7 +165,7 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace                 # 212 tests
+cargo test --workspace                 # 224 tests
 cargo clippy --workspace --all-targets
 
 cd crates/terminal && cargo test       # 41 more, separate workspace

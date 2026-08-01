@@ -16,12 +16,14 @@ use serde::{Deserialize, Serialize};
 
 pub mod batch;
 pub mod codec;
+pub mod command;
 pub mod envelope;
 pub mod frame;
 pub mod session;
 
 pub use batch::{Batch, Batcher, FlushReason};
 pub use codec::{decode_client, decode_server, encode, CodecError, MAX_FRAME_BYTES};
+pub use command::{Command, Role, Scope};
 pub use envelope::{
     accept_client, accept_server, Channel, ClientEnvelope, Incoming, ReqId, ServerEnvelope, SkipCounters,
     Skipped, SymbolId, KNOWN_VER,
