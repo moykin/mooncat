@@ -20,3 +20,4 @@ tokio = { workspace = true, features = ["net"] }
 tokio-tungstenite = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
+rmpv = { workspace = true }
