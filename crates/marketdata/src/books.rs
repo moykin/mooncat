@@ -26,6 +26,14 @@ pub const DEFAULT_RESYNC_COOLDOWN_MS: i64 = 1_000;
 /// start over rather than replaying minutes of stale updates.
 const MAX_BUFFERED: usize = 4_096;
 
+/// How long a snapshot request may be outstanding before another is allowed.
+///
+/// Not a nicety. A fetch that never reports back — a dropped connection, a task that died —
+/// would otherwise leave `awaiting` latched on forever and the book would never rebuild.
+/// One transient failure at startup must not cost an instrument its book for the whole
+/// session, which is exactly what happened before this existed.
+pub const REQUEST_DEADLINE_MS: i64 = 10_000;
+
 /// What the caller must do after feeding an update in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Need {
@@ -158,6 +166,16 @@ impl BookSet {
             .collect()
     }
 
+    /// Report that a snapshot fetch failed, so the next delta may ask again.
+    ///
+    /// The cooldown still applies — a venue refusing one request will likely refuse the
+    /// next — but the request is no longer considered outstanding.
+    pub fn snapshot_failed(&mut self, symbol: &Symbol) {
+        if let Some(entry) = self.entries.get_mut(&symbol.key()) {
+            entry.awaiting = false;
+        }
+    }
+
     /// Forget everything. Used on reconnect: the venue's sequence numbers do not survive it.
     pub fn reset(&mut self) {
         self.entries.clear();
@@ -176,13 +194,15 @@ impl Entry {
     }
 
     fn request_snapshot(&mut self, now: Timestamp, cooldown_ms: i64) -> Need {
-        if self.awaiting {
+        let since_request = self.requested_at.map(|at| at.age_millis_from(now));
+
+        // An outstanding request blocks another — but only until the deadline. Beyond it we
+        // assume the fetch is never coming back rather than wait forever.
+        if self.awaiting && since_request.is_some_and(|age| age < REQUEST_DEADLINE_MS) {
             return Need::Nothing;
         }
-        if let Some(at) = self.requested_at {
-            if at.age_millis_from(now) < cooldown_ms {
-                return Need::Nothing;
-            }
+        if !self.awaiting && since_request.is_some_and(|age| age < cooldown_ms) {
+            return Need::Nothing;
         }
         self.awaiting = true;
         self.requested_at = Some(now);
@@ -317,6 +337,37 @@ mod tests {
 
         assert!(books.stale(at(3_000), 5_000).is_empty());
         assert_eq!(books.stale(at(10_000), 5_000), vec![sym()]);
+    }
+
+    #[test]
+    fn a_failed_fetch_does_not_cost_the_instrument_its_book_forever() {
+        // The bug this exists for: one transport error at startup latched `awaiting` on and
+        // the book never rebuilt for the rest of the session.
+        let mut books = BookSet::new(1_000);
+        assert_eq!(books.on_delta(delta(990, 1_010, dec!(5)), at(0)).need, Need::Snapshot(sym()));
+
+        // The fetch fails; nothing is ever installed.
+        books.snapshot_failed(&sym());
+
+        // Inside the cooldown, still quiet.
+        assert_eq!(books.on_delta(delta(1_010, 1_020, dec!(5)), at(500)).need, Need::Nothing);
+        // Past it, the book asks again instead of giving up.
+        assert_eq!(books.on_delta(delta(1_020, 1_030, dec!(5)), at(1_200)).need, Need::Snapshot(sym()));
+    }
+
+    #[test]
+    fn a_fetch_that_never_reports_back_stops_blocking_after_the_deadline() {
+        // A task that dies without calling either install_snapshot or snapshot_failed must
+        // not wedge the book. Nothing outside this crate can guarantee it reports.
+        let mut books = BookSet::new(1_000);
+        assert_eq!(books.on_delta(delta(990, 1_010, dec!(5)), at(0)).need, Need::Snapshot(sym()));
+
+        let just_inside = REQUEST_DEADLINE_MS - 1;
+        assert_eq!(books.on_delta(delta(1_010, 1_020, dec!(5)), at(just_inside)).need, Need::Nothing);
+        assert_eq!(
+            books.on_delta(delta(1_020, 1_030, dec!(5)), at(REQUEST_DEADLINE_MS + 1)).need,
+            Need::Snapshot(sym())
+        );
     }
 
     #[test]

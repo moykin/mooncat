@@ -223,9 +223,11 @@ async fn pump(
     let (mut tx, mut rx) = socket.split();
     let mut frame_id = 0u64;
 
-    // Snapshot fetches run on their own tasks and report back here. Awaiting them inline
-    // would stall the read loop, and a stalled reader is exactly how a book goes stale.
-    let (snap_tx, mut snap_rx) = mpsc::unbounded_channel::<OrderBook>();
+    // Snapshot fetches run on their own tasks and report back here — success *and* failure.
+    // Awaiting them inline would stall the read loop, and a stalled reader is exactly how a
+    // book goes stale. Failures must be reported too: a fetch that reports nothing leaves
+    // the book waiting for a snapshot that is never coming.
+    let (snap_tx, mut snap_rx) = mpsc::unbounded_channel::<SnapshotResult>();
     let mut watchdog = tokio::time::interval(STALENESS_CHECK);
     watchdog.tick().await; // the first tick fires immediately
 
@@ -282,11 +284,14 @@ async fn pump(
                 Some(Ok(_)) => {}
             },
 
-            Some(snapshot) = snap_rx.recv() => {
-                if let Some(joined) = books.install_snapshot(snapshot, now()) {
-                    ctx.sink.send(Event::market(now(), MarketEvent::BookSnapshot(joined)));
+            Some(result) = snap_rx.recv() => match result {
+                SnapshotResult::Fetched(snapshot) => {
+                    if let Some(joined) = books.install_snapshot(snapshot, now()) {
+                        ctx.sink.send(Event::market(now(), MarketEvent::BookSnapshot(joined)));
+                    }
                 }
-            }
+                SnapshotResult::Failed(symbol) => books.snapshot_failed(&symbol),
+            },
 
             _ = watchdog.tick() => {
                 for symbol in books.stale(now(), STALE_AFTER_MS) {
@@ -300,12 +305,21 @@ async fn pump(
     }
 }
 
+/// The outcome of one snapshot fetch, reported back to the socket task.
+///
+/// Failure is a variant rather than a log line: a fetch that reports nothing leaves the book
+/// waiting for a snapshot that is never coming.
+enum SnapshotResult {
+    Fetched(OrderBook),
+    Failed(Symbol),
+}
+
 /// Feed one book update through the maintainer, forwarding only what is safe to forward.
 fn on_delta(
     ctx: &Ctx<'_>,
     books: &mut BookSet,
     delta: BookDelta,
-    snap_tx: &mpsc::UnboundedSender<OrderBook>,
+    snap_tx: &mpsc::UnboundedSender<SnapshotResult>,
 ) {
     let outcome = books.on_delta(delta.clone(), now());
 
@@ -322,13 +336,15 @@ fn on_delta(
 
     let (http, endpoints, tx) = (ctx.http.clone(), ctx.endpoints, snap_tx.clone());
     tokio::spawn(async move {
-        match fetch_snapshot(&http, endpoints, &symbol, SNAPSHOT_DEPTH).await {
-            // A closed channel just means the socket moved on; the next delta re-requests.
-            Ok(book) => {
-                let _ = tx.send(book);
+        // A closed channel just means the socket moved on; the next delta re-requests.
+        let outcome = match fetch_snapshot(&http, endpoints, &symbol, SNAPSHOT_DEPTH).await {
+            Ok(book) => SnapshotResult::Fetched(book),
+            Err(e) => {
+                tracing::warn!(%symbol, error = %e, "book snapshot failed, will retry");
+                SnapshotResult::Failed(symbol)
             }
-            Err(e) => tracing::warn!(%symbol, error = %e, "book snapshot failed"),
-        }
+        };
+        let _ = tx.send(outcome);
     });
 }
 

@@ -46,11 +46,18 @@ mod tests {
     use super::*;
 
     /// `std::env` is process-global, so these run under one lock rather than in parallel.
+    ///
+    /// Every variable the config reads is cleared first. Without that, a test that leaves
+    /// `MOON_BIND` set to something invalid makes an unrelated test fail depending on the
+    /// order they happen to run in — which is exactly how this flaked.
     fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
         use std::sync::Mutex;
         static LOCK: Mutex<()> = Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
+        for key in ["MOON_TOKEN", "MOON_BIND"] {
+            std::env::remove_var(key);
+        }
         for (k, v) in vars {
             match v {
                 Some(v) => std::env::set_var(k, v),

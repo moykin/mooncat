@@ -125,12 +125,16 @@ impl TerminalView {
         let palette = MoonPalette::active(cx);
         h_flex()
             .w_full()
-            .px_4()
+            // The window's own controls are drawn over this row on macOS; start clear of them.
+            .pl(px(84.0))
+            .pr_4()
             .py_3()
             .gap_3()
             .justify_between()
             .child(MoonText::new("moonterm").font_size(15.0).weight(700.0))
-            .child(MoonText::new(self.core.clone()).font_size(12.0).color(palette.text_muted))
+            .child(
+                MoonText::new(self.core.clone()).font_size(12.0).color(palette.text_muted).uppercase(false),
+            )
             .child(MoonText::new(state.status.label()).font_size(12.0).color(if state.status.is_live() {
                 palette.green
             } else {
@@ -149,6 +153,7 @@ impl TerminalView {
                 _ => "not connected to a core",
             })
             .color(palette.text_muted)
+            .uppercase(false)
             .into_any_element()];
         }
 
@@ -161,7 +166,12 @@ impl TerminalView {
 
                 let (bid, ask) = (book.best_bid(), book.best_ask());
                 let cell = |text: String, color: u32| {
-                    MoonText::new(text).font_size(13.0).color(color).mono(true).into_any_element()
+                    MoonText::new(text)
+                        .font_size(13.0)
+                        .color(color)
+                        .mono(true)
+                        .uppercase(false)
+                        .into_any_element()
                 };
 
                 h_flex()
