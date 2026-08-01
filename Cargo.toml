@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/domain", "crates/exchange"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+domain = { path = "crates/domain" }
+exchange = { path = "crates/exchange" }
+
+async-trait = "0.1"
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+rust_decimal_macros = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

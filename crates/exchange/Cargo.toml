@@ -1,0 +1,15 @@
+[package]
+name = "exchange"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The connector contract every venue implementation fulfils."
+
+[dependencies]
+domain = { workspace = true }
+
+async-trait = { workspace = true }
+rust_decimal = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# runtime config and secrets — never commit
+/config.toml
+/secrets.toml
+*.enc
+*.key
+
+# local data
+/data
+*.sqlite
+*.sqlite-journal
+*.parquet
+/logs
