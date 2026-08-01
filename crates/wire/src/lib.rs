@@ -25,6 +25,7 @@ pub mod frame;
 pub mod heartbeat;
 pub mod idempotency;
 pub mod pin;
+pub mod resume;
 pub mod session;
 
 pub use admission::{authorize, Admit, Gatekeeper, SessionId};
@@ -41,6 +42,7 @@ pub use frame::{Direction, Frame};
 pub use heartbeat::{Heartbeat, PongOutcome};
 pub use idempotency::{Admission, ReqRing, SEEN_REQ_CAPACITY};
 pub use pin::{PinnedVerifier, SpkiPin};
+pub use resume::{Impossible, ResumeLog, Resumed, RESUME_WINDOW};
 pub use session::{Auth, Session};
 
 /// Bumped whenever a message changes shape. Mismatched peers are rejected at Hello rather
