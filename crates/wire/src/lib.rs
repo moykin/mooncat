@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod admission;
+pub mod audit;
 pub mod auth;
 pub mod batch;
 pub mod codec;
@@ -30,6 +31,7 @@ pub mod resume;
 pub mod session;
 
 pub use admission::{authorize, Admit, Gatekeeper, SessionId};
+pub use audit::{AuditRecord, Outcome};
 pub use auth::{DeviceId, DeviceKey, DeviceRegistry, Transcript};
 pub use batch::{Batch, Batcher, FlushReason};
 pub use codec::{decode_client, decode_server, encode, CodecError, MAX_FRAME_BYTES};
