@@ -9,22 +9,34 @@
 //! stream thereafter. Deltas already queued for that session are older than the state it was
 //! handed, and [`OrderBook::apply`] discards them as stale — the overlap resolves itself.
 
-use domain::{Event, MarketEvent, OrderBook, Payload};
+use domain::{Candle, Event, MarketEvent, OrderBook, Payload};
 use exchange::Subscription;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
+
+/// Candles retained per instrument for late subscribers.
+///
+/// A terminal that connects an hour in must get a chart with history on it, not a single bar
+/// that grows from the right edge.
+const HISTORY: usize = 600;
 
 #[derive(Clone, Default)]
 pub struct MarketState {
     books: Arc<RwLock<HashMap<String, OrderBook>>>,
+    candles: Arc<RwLock<HashMap<String, VecDeque<Candle>>>>,
 }
 
 impl MarketState {
     /// Fold one event into the read-model. Called for every event before it is broadcast.
     pub fn apply(&self, event: &Event) {
         let Payload::Market(market) = &event.payload else { return };
-        let mut books = self.books.write().unwrap_or_else(|e| e.into_inner());
 
+        if let MarketEvent::Candle(candle) = market {
+            self.fold_candle(candle);
+            return;
+        }
+
+        let mut books = self.books.write().unwrap_or_else(|e| e.into_inner());
         match market {
             MarketEvent::BookSnapshot(book) => {
                 if let Some(symbol) = &book.symbol {
@@ -45,6 +57,36 @@ impl MarketState {
             }
             _ => {}
         }
+    }
+
+    /// Replace the matching bar, or append a new one.
+    ///
+    /// The connector republishes the forming bar on every print, so this is an update far
+    /// more often than an insert; matching on open time keeps one bar per bucket.
+    fn fold_candle(&self, candle: &Candle) {
+        let mut candles = self.candles.write().unwrap_or_else(|e| e.into_inner());
+        let series = candles.entry(candle.symbol.key()).or_default();
+
+        match series.back_mut() {
+            Some(last) if last.open_time == candle.open_time => *last = candle.clone(),
+            Some(last) if last.open_time > candle.open_time => {}
+            _ => {
+                series.push_back(candle.clone());
+                while series.len() > HISTORY {
+                    series.pop_front();
+                }
+            }
+        }
+    }
+
+    /// Candle history for the instruments a session just subscribed to, oldest first.
+    pub fn candles_for(&self, subs: &[Subscription]) -> Vec<Candle> {
+        let candles = self.candles.read().unwrap_or_else(|e| e.into_inner());
+        let mut keys: Vec<String> = subs.iter().map(|s| s.symbol().key()).collect();
+        keys.sort();
+        keys.dedup();
+
+        keys.iter().filter_map(|k| candles.get(k)).flatten().cloned().collect()
     }
 
     /// Current books for the instruments a session just subscribed to.
@@ -158,6 +200,71 @@ mod tests {
             Subscription::Book(sym(MarketKind::Spot)),
         ]);
         assert_eq!(served.len(), 1);
+    }
+
+    fn candle(open_time: i64, close: rust_decimal::Decimal, closed: bool) -> Event {
+        Event::market(
+            Timestamp::from_millis(open_time),
+            MarketEvent::Candle(Candle {
+                symbol: sym(MarketKind::Spot),
+                open_time: Timestamp::from_millis(open_time),
+                interval_ms: 1_000,
+                open: dec!(100),
+                high: close.max(dec!(100)),
+                low: close.min(dec!(100)),
+                close,
+                volume: dec!(1),
+                closed,
+            }),
+        )
+    }
+
+    #[test]
+    fn a_late_subscriber_gets_chart_history_not_a_single_bar() {
+        let state = MarketState::default();
+        state.apply(&candle(1_000, dec!(101), true));
+        state.apply(&candle(2_000, dec!(102), true));
+        state.apply(&candle(3_000, dec!(103), false));
+
+        let served = state.candles_for(&[book_sub(MarketKind::Spot)]);
+        assert_eq!(served.len(), 3);
+        assert_eq!(served.first().unwrap().open_time.millis(), 1_000, "oldest first");
+        assert_eq!(served.last().unwrap().close, dec!(103));
+    }
+
+    #[test]
+    fn the_forming_bar_is_replaced_rather_than_appended() {
+        // The connector republishes the forming bar on every print; appending each one would
+        // turn a single second into hundreds of bars.
+        let state = MarketState::default();
+        for close in [dec!(101), dec!(102), dec!(103)] {
+            state.apply(&candle(1_000, close, false));
+        }
+
+        let served = state.candles_for(&[book_sub(MarketKind::Spot)]);
+        assert_eq!(served.len(), 1);
+        assert_eq!(served[0].close, dec!(103), "the latest print wins");
+    }
+
+    #[test]
+    fn a_candle_older_than_the_last_one_is_dropped() {
+        // A replayed print must not reopen a bar the chart has already finished.
+        let state = MarketState::default();
+        state.apply(&candle(2_000, dec!(102), true));
+        state.apply(&candle(1_000, dec!(999), true));
+
+        let served = state.candles_for(&[book_sub(MarketKind::Spot)]);
+        assert_eq!(served.len(), 1);
+        assert_eq!(served[0].open_time.millis(), 2_000);
+    }
+
+    #[test]
+    fn candles_and_books_are_served_per_instrument() {
+        let state = MarketState::default();
+        state.apply(&candle(1_000, dec!(101), true));
+
+        assert_eq!(state.candles_for(&[book_sub(MarketKind::Spot)]).len(), 1);
+        assert!(state.candles_for(&[book_sub(MarketKind::LinearPerp)]).is_empty());
     }
 
     #[test]

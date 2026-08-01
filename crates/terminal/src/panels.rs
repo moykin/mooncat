@@ -4,11 +4,12 @@
 //! readable as one piece of layout, and each panel stays a function of the feed state.
 
 use crate::book_view::{depth_view, DepthView, Level};
+use crate::chart::{chart_view, Bar, ChartView};
 use crate::clock;
 use crate::feed::{FeedState, LogLevel, Status};
 use domain::{Decimal, PublicTrade, Side};
 use gpui::prelude::*;
-use gpui::{div, px, rgba, AnyElement, App};
+use gpui::{div, px, relative, rgba, AnyElement, App};
 use moon_ui::{h_flex, v_flex, MoonPalette, MoonText};
 
 /// Price levels shown on each side of the book.
@@ -17,6 +18,13 @@ pub const DEPTH_ROWS: usize = 16;
 pub const TAPE_ROWS: usize = 40;
 /// Log lines shown at once.
 pub const LOG_ROWS: usize = 60;
+/// Candles across the chart.
+pub const CHART_BARS: usize = 90;
+
+/// Width of the price axis gutter.
+const AXIS_W: f32 = 74.0;
+/// A body thinner than this is drawn as a line, so a doji stays visible.
+const MIN_BODY: f32 = 0.004;
 
 const ROW_H: f32 = 17.0;
 const BAR_W: f32 = 84.0;
@@ -235,36 +243,113 @@ pub fn log(state: &FeedState, cx: &App) -> AnyElement {
 
 // ---------------------------------------------------------------------- chart
 
-/// Where the chart will go.
+/// The price chart.
 ///
-/// A labelled empty area rather than a blank one: an unbuilt feature and a broken one look
-/// the same on screen, and only one of them deserves a bug report.
-pub fn chart_placeholder(state: &FeedState, key: &str, cx: &App) -> AnyElement {
+/// Bars are positioned in fractions of the pane rather than pixels, so the chart fills
+/// whatever space the layout gives it without the geometry needing to know the size.
+pub fn chart(state: &FeedState, key: &str, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let mid = state.books.get(key).and_then(|b| b.mid());
+    let series: Vec<domain::Candle> =
+        state.candles.get(key).map(|s| s.iter().cloned().collect()).unwrap_or_default();
 
-    v_flex()
+    if series.is_empty() {
+        let text = if state.books.contains_key(key) {
+            "no prints yet — the chart is built from the tape"
+        } else {
+            "waiting for the instrument"
+        };
+        return v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(note(text, p.text_muted))
+            .into_any_element();
+    }
+
+    let view = chart_view(&series, CHART_BARS);
+
+    h_flex()
         .size_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
         .child(
-            MoonText::new(mid.map(show).unwrap_or_else(|| "—".into()))
-                .font_size(34.0)
-                .mono(true)
-                .uppercase(false)
-                .color(p.text),
+            // The plot is a positioning context; every bar inside is placed against it.
+            div()
+                .relative()
+                .flex_1()
+                .h_full()
+                .children(view.price_ticks.iter().map(|tick| gridline(tick.y, p.row_line)))
+                .children(view.last_y.map(|y| gridline(y, p.accent)))
+                .children(view.bars.iter().map(|bar| candle_marks(bar, cx)))
+                .into_any_element(),
         )
+        .child(price_axis(&view, cx))
+        .into_any_element()
+}
+
+fn gridline(y: f32, color: u32) -> AnyElement {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .top(relative(y))
+        .h(px(1.0))
+        .bg(rgba((color << 8) | 0x66))
+        .into_any_element()
+}
+
+/// One candle: the wick as a hairline, the body as a filled block.
+fn candle_marks(bar: &Bar, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let color = if bar.rising { p.green } else { p.red };
+
+    let top = bar.open_y.min(bar.close_y);
+    let height = (bar.open_y - bar.close_y).abs();
+
+    let body = div()
+        .absolute()
+        .left(relative(bar.x - bar.half_width))
+        .w(relative(bar.half_width * 2.0))
+        .top(relative(top))
+        .bg(rgba((color << 8) | 0xEE));
+
+    // A candle that opened and closed at the same price has no body to draw; a hairline
+    // keeps it on the chart instead of silently vanishing.
+    let body = if height < MIN_BODY { body.h(px(1.5)) } else { body.h(relative(height)) };
+
+    div()
+        .absolute()
+        .inset_0()
         .child(
-            MoonText::new(key.strip_prefix("binance:").unwrap_or(key).to_string())
-                .font_size(12.0)
-                .mono(true)
-                .uppercase(false)
-                .color(p.text_muted),
+            div()
+                .absolute()
+                .left(relative(bar.x))
+                .w(px(1.0))
+                .top(relative(bar.high_y))
+                .h(relative(bar.low_y - bar.high_y))
+                .bg(rgba((color << 8) | 0x99)),
         )
-        .child(
-            MoonText::new("tick chart is not built yet").font_size(11.0).uppercase(false).color(p.text_faint),
-        )
+        .child(body)
+        .into_any_element()
+}
+
+/// Price gutter down the right-hand edge, with the last price picked out.
+fn price_axis(view: &ChartView, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+
+    let label = |y: f32, text: String, color: u32| {
+        div()
+            .absolute()
+            .top(relative(y))
+            .right_0()
+            .child(MoonText::new(text).font_size(10.0).mono(true).uppercase(false).color(color))
+            .into_any_element()
+    };
+
+    div()
+        .relative()
+        .w(px(AXIS_W))
+        .h_full()
+        .children(view.price_ticks.iter().map(|t| label(t.y, show(t.price), p.text_dim)))
+        .children(view.last.zip(view.last_y).map(|(price, y)| label(y, show(price), p.accent)))
         .into_any_element()
 }
 

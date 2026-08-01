@@ -28,6 +28,7 @@ use moon_ui::{
 use std::time::Instant;
 
 mod book_view;
+mod chart;
 mod clock;
 mod feed;
 mod panels;
@@ -148,7 +149,7 @@ impl Render for TerminalView {
                     .items_stretch()
                     .gap_2()
                     .px_2()
-                    .child(pane(panels::chart_placeholder(&state, &key, cx), true, cx))
+                    .child(pane(panels::chart(&state, &key, cx), true, cx))
                     .child(div().w(px(432.0)).h_full().child(pane(
                         panels::order_book(&state, &key, cx),
                         false,

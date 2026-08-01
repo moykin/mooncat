@@ -18,7 +18,7 @@ use domain::{
     Timestamp,
 };
 use exchange::{Error, EventSink, MarketDataSource, Result, Subscription};
-use marketdata::{BookSet, Need};
+use marketdata::{BookSet, CandleSet, Need};
 use std::collections::BTreeSet;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -42,6 +42,10 @@ const STALENESS_CHECK: Duration = Duration::from_secs(5);
 
 /// A book silent for this long on a live socket is reported, not waited out.
 const STALE_AFTER_MS: i64 = 30_000;
+
+/// Candle bucket. One second, because the chart this feeds is a scalping chart and the
+/// venue's own klines start at a minute.
+const CANDLE_INTERVAL_MS: i64 = 1_000;
 
 /// Commands sent from the public API to the socket task.
 enum Command {
@@ -169,6 +173,7 @@ async fn socket_task(
     // Survives reconnects: the venue forgets our subscriptions, we do not.
     let mut active: BTreeSet<String> = BTreeSet::new();
     let mut books = BookSet::default();
+    let mut candles = CandleSet::new(CANDLE_INTERVAL_MS, marketdata::candles::DEFAULT_CAPACITY);
     let mut backoff = BACKOFF_START;
 
     loop {
@@ -178,7 +183,7 @@ async fn socket_task(
             Ok((socket, _)) => {
                 backoff = BACKOFF_START;
                 let ctx = Ctx { market, endpoints, http: &http, sink: &sink };
-                match pump(socket, &ctx, &mut commands, &mut active, &mut books).await {
+                match pump(socket, &ctx, &mut commands, &mut active, &mut books, &mut candles).await {
                     Exit::Shutdown => return,
                     Exit::Reconnect(reason) => {
                         sink.send(Event::connection(now(), ConnectionEvent::Disconnected { reason }));
@@ -216,6 +221,7 @@ async fn pump(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     active: &mut BTreeSet<String>,
     books: &mut BookSet,
+    candles: &mut CandleSet,
 ) -> Exit {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -267,6 +273,11 @@ async fn pump(
                 Some(Err(e)) => return Exit::Reconnect(e.to_string()),
                 Some(Ok(Message::Text(text))) => match decode(&text, ctx.market) {
                     Some(Decoded::Trade(trade)) => {
+                        // Candles are folded from the same prints the tape shows, so the two
+                        // can never disagree.
+                        for candle in fold(candles, &trade) {
+                            ctx.sink.send(Event::market(now(), MarketEvent::Candle(candle)));
+                        }
                         ctx.sink.send(Event::market(now(), MarketEvent::Trade(trade)));
                     }
                     Some(Decoded::Delta(delta)) => {
@@ -307,6 +318,18 @@ async fn pump(
                 }
             }
         }
+    }
+}
+
+/// Fold a print into its candle and return whatever consumers must redraw.
+///
+/// A boundary yields two: the bar that just became final, then the one now forming. Sending
+/// only the new one would leave the previous bar drawn as still-forming forever.
+fn fold(candles: &mut CandleSet, trade: &PublicTrade) -> Vec<domain::Candle> {
+    match candles.on_trade(trade) {
+        marketdata::Update::Formed(candle) => vec![candle],
+        marketdata::Update::Closed { closed, opened } => vec![closed, opened],
+        marketdata::Update::Ignored => Vec::new(),
     }
 }
 

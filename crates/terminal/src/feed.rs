@@ -4,7 +4,7 @@
 //! tokio runtime. So the client runs on a thread of its own and publishes into shared state,
 //! and the UI reads that state on the frame tick. Nothing in the render path ever awaits.
 
-use domain::{ApplyOutcome, ConnectionEvent, MarketEvent, OrderBook, Payload, PublicTrade};
+use domain::{ApplyOutcome, Candle, ConnectionEvent, MarketEvent, OrderBook, Payload, PublicTrade};
 use exchange::Subscription;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::{BTreeMap, VecDeque};
@@ -26,6 +26,10 @@ const LOG_DEPTH: usize = 300;
 /// Bounded because a busy instrument prints faster than anyone reads, and an unbounded tape
 /// is a memory leak with a scrollbar.
 const TAPE_DEPTH: usize = 200;
+
+/// Candles retained per instrument. Comfortably more than the chart shows, so scrolling
+/// back has something to reach.
+const CANDLE_DEPTH: usize = 900;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -59,6 +63,8 @@ pub struct FeedState {
     pub trades: BTreeMap<String, u64>,
     /// Most recent trades first, capped at [`TAPE_DEPTH`].
     pub tape: BTreeMap<String, VecDeque<PublicTrade>>,
+    /// Chart history, oldest first.
+    pub candles: BTreeMap<String, VecDeque<Candle>>,
     /// Last thing the core said about its own health.
     pub core_note: Option<String>,
     /// Newest first.
@@ -86,6 +92,7 @@ impl Default for FeedState {
             books: BTreeMap::new(),
             trades: BTreeMap::new(),
             tape: BTreeMap::new(),
+            candles: BTreeMap::new(),
             core_note: None,
             log: VecDeque::new(),
         }
@@ -244,6 +251,21 @@ fn apply(state: &Arc<RwLock<FeedState>>, event: domain::Event) {
             tape.push_front(trade);
             tape.truncate(TAPE_DEPTH);
         }
+        Payload::Market(MarketEvent::Candle(candle)) => {
+            let series = guard.candles.entry(candle.symbol.key()).or_default();
+            // The core republishes the forming bar on every print; matching on open time
+            // keeps one bar per bucket instead of hundreds per second.
+            match series.back_mut() {
+                Some(last) if last.open_time == candle.open_time => *last = candle,
+                Some(last) if last.open_time > candle.open_time => {}
+                _ => {
+                    series.push_back(candle);
+                    while series.len() > CANDLE_DEPTH {
+                        series.pop_front();
+                    }
+                }
+            }
+        }
         Payload::Connection(ConnectionEvent::Resyncing { reason }) => {
             guard.core_note = Some(reason.clone());
             push_log(&mut guard, LogLevel::Info, reason);
@@ -368,6 +390,59 @@ mod tests {
 
         apply(&state, Event::connection(Timestamp::from_millis(2), ConnectionEvent::Ready));
         assert!(state.read().unwrap().core_note.is_none());
+    }
+
+    fn candle_event(open_time: i64, close: &str, closed: bool) -> Event {
+        Event::market(
+            Timestamp::from_millis(open_time),
+            MarketEvent::Candle(Candle {
+                symbol: sym(),
+                open_time: Timestamp::from_millis(open_time),
+                interval_ms: 1_000,
+                open: "100".parse().unwrap(),
+                high: "110".parse().unwrap(),
+                low: "90".parse().unwrap(),
+                close: close.parse().unwrap(),
+                volume: "1".parse().unwrap(),
+                closed,
+            }),
+        )
+    }
+
+    #[test]
+    fn the_forming_bar_is_replaced_not_appended() {
+        // The core republishes it on every print; appending would make one second into
+        // hundreds of bars and the chart would compress to nothing.
+        let state = state();
+        for close in ["101", "102", "103"] {
+            apply(&state, candle_event(1_000, close, false));
+        }
+
+        let guard = state.read().unwrap();
+        let series = &guard.candles[&sym().key()];
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].close, "103".parse().unwrap());
+    }
+
+    #[test]
+    fn closing_a_bar_and_opening_the_next_gives_two() {
+        let state = state();
+        apply(&state, candle_event(1_000, "101", true));
+        apply(&state, candle_event(2_000, "102", false));
+
+        assert_eq!(state.read().unwrap().candles[&sym().key()].len(), 2);
+    }
+
+    #[test]
+    fn a_replayed_older_bar_is_dropped() {
+        let state = state();
+        apply(&state, candle_event(2_000, "102", true));
+        apply(&state, candle_event(1_000, "999", true));
+
+        let guard = state.read().unwrap();
+        let series = &guard.candles[&sym().key()];
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].open_time.millis(), 2_000);
     }
 
     #[test]
