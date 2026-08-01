@@ -25,7 +25,7 @@ const LOG_DEPTH: usize = 300;
 ///
 /// Bounded because a busy instrument prints faster than anyone reads, and an unbounded tape
 /// is a memory leak with a scrollbar.
-const TAPE_DEPTH: usize = 200;
+const TAPE_DEPTH: usize = 4_000;
 
 /// Candles retained per instrument. Comfortably more than the chart shows, so scrolling
 /// back has something to reach.
@@ -248,6 +248,8 @@ fn apply(state: &Arc<RwLock<FeedState>>, event: domain::Event) {
             *guard.trades.entry(key.clone()).or_default() += 1;
 
             let tape = guard.tape.entry(key).or_default();
+            // Replayed history arrives oldest-first while live prints arrive newest; both
+            // land at the front, and the chart sorts by timestamp rather than by arrival.
             tape.push_front(trade);
             tape.truncate(TAPE_DEPTH);
         }

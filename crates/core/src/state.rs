@@ -9,7 +9,7 @@
 //! stream thereafter. Deltas already queued for that session are older than the state it was
 //! handed, and [`OrderBook::apply`] discards them as stale — the overlap resolves itself.
 
-use domain::{Candle, Event, MarketEvent, OrderBook, Payload};
+use domain::{Candle, Event, MarketEvent, OrderBook, Payload, PublicTrade};
 use exchange::Subscription;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
@@ -20,10 +20,17 @@ use std::sync::{Arc, RwLock};
 /// that grows from the right edge.
 const HISTORY: usize = 600;
 
+/// Prints retained per instrument.
+///
+/// The chart draws a mark per trade, so a terminal joining late needs the prints themselves,
+/// not just the bars they were folded into.
+const TAPE_HISTORY: usize = 4_000;
+
 #[derive(Clone, Default)]
 pub struct MarketState {
     books: Arc<RwLock<HashMap<String, OrderBook>>>,
     candles: Arc<RwLock<HashMap<String, VecDeque<Candle>>>>,
+    tape: Arc<RwLock<HashMap<String, VecDeque<PublicTrade>>>>,
 }
 
 impl MarketState {
@@ -33,6 +40,15 @@ impl MarketState {
 
         if let MarketEvent::Candle(candle) = market {
             self.fold_candle(candle);
+            return;
+        }
+        if let MarketEvent::Trade(trade) = market {
+            let mut tape = self.tape.write().unwrap_or_else(|e| e.into_inner());
+            let series = tape.entry(trade.symbol.key()).or_default();
+            series.push_back(trade.clone());
+            while series.len() > TAPE_HISTORY {
+                series.pop_front();
+            }
             return;
         }
 
@@ -87,6 +103,16 @@ impl MarketState {
         keys.dedup();
 
         keys.iter().filter_map(|k| candles.get(k)).flatten().cloned().collect()
+    }
+
+    /// Print history for the instruments a session just subscribed to, oldest first.
+    pub fn tape_for(&self, subs: &[Subscription]) -> Vec<PublicTrade> {
+        let tape = self.tape.read().unwrap_or_else(|e| e.into_inner());
+        let mut keys: Vec<String> = subs.iter().map(|s| s.symbol().key()).collect();
+        keys.sort();
+        keys.dedup();
+
+        keys.iter().filter_map(|k| tape.get(k)).flatten().cloned().collect()
     }
 
     /// Current books for the instruments a session just subscribed to.
@@ -257,6 +283,29 @@ mod tests {
         let served = state.candles_for(&[book_sub(MarketKind::Spot)]);
         assert_eq!(served.len(), 1);
         assert_eq!(served[0].open_time.millis(), 2_000);
+    }
+
+    #[test]
+    fn a_late_subscriber_gets_the_prints_the_chart_draws() {
+        let state = MarketState::default();
+        for id in 0..3u64 {
+            state.apply(&Event::market(
+                Timestamp::from_millis(id as i64),
+                MarketEvent::Trade(domain::PublicTrade {
+                    symbol: sym(MarketKind::Spot),
+                    price: dec!(100),
+                    qty: dec!(1),
+                    taker_side: domain::Side::Buy,
+                    ts: Timestamp::from_millis(id as i64),
+                    id,
+                }),
+            ));
+        }
+
+        let served = state.tape_for(&[book_sub(MarketKind::Spot)]);
+        assert_eq!(served.len(), 3);
+        assert_eq!(served.first().unwrap().id, 0, "oldest first");
+        assert!(state.tape_for(&[book_sub(MarketKind::LinearPerp)]).is_empty());
     }
 
     #[test]

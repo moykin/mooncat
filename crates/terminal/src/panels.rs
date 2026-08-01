@@ -4,7 +4,7 @@
 //! readable as one piece of layout, and each panel stays a function of the feed state.
 
 use crate::book_view::{depth_view, DepthView, Level};
-use crate::chart::{chart_view, Bar, ChartView};
+use crate::chart::{heatmap, tick_plot, HeatRow, Mark, Step, TickPlot};
 use crate::clock;
 use crate::feed::{FeedState, LogLevel, Status};
 use domain::{Decimal, PublicTrade, Side};
@@ -19,11 +19,16 @@ pub const TAPE_ROWS: usize = 40;
 /// Log lines shown at once.
 pub const LOG_ROWS: usize = 60;
 /// Width of the price axis gutter.
-const AXIS_W: f32 = 74.0;
+const AXIS_W: f32 = 78.0;
 /// Width of the percent axis gutter.
 const PCT_W: f32 = 58.0;
-/// A body thinner than this is drawn as a line, so a doji stays visible.
-const MIN_BODY: f32 = 0.004;
+/// Width of the book-depth strip beside the plot.
+const HEAT_W: f32 = 96.0;
+/// Height of the volume histogram.
+const VOLUME_H: f32 = 46.0;
+/// Print marks, smallest and largest.
+const MARK_MIN: f32 = 3.0;
+const MARK_MAX: f32 = 9.0;
 
 const ROW_H: f32 = 17.0;
 const BAR_W: f32 = 84.0;
@@ -242,18 +247,19 @@ pub fn log(state: &FeedState, cx: &App) -> AnyElement {
 
 // ---------------------------------------------------------------------- chart
 
-/// The price chart.
+/// The tick plot: price against time, a mark per print, the book alongside it.
 ///
-/// Bars are positioned in fractions of the pane rather than pixels, so the chart fills
-/// whatever space the layout gives it without the geometry needing to know the size.
-pub fn chart(state: &FeedState, key: &str, bars: usize, cx: &App) -> AnyElement {
+/// Laid out as three strips sharing one price scale — labels on the left, the plot, the
+/// book heat on the right — plus a volume histogram and a time axis under all of them.
+pub fn chart(state: &FeedState, key: &str, span_ms: i64, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let series: Vec<domain::Candle> =
-        state.candles.get(key).map(|s| s.iter().cloned().collect()).unwrap_or_default();
 
-    if series.is_empty() {
+    let prints: Vec<domain::PublicTrade> =
+        state.tape.get(key).map(|t| t.iter().cloned().collect()).unwrap_or_default();
+
+    if prints.is_empty() {
         let text = if state.books.contains_key(key) {
-            "no prints yet — the chart is built from the tape"
+            "book is live but no prints have arrived — the plot is drawn from the tape"
         } else {
             "waiting for the instrument"
         };
@@ -265,59 +271,93 @@ pub fn chart(state: &FeedState, key: &str, bars: usize, cx: &App) -> AnyElement 
             .into_any_element();
     }
 
-    let view = chart_view(&series, bars);
+    let book = state.books.get(key);
+    let plot = tick_plot(&prints, span_ms, book);
+    let heat = book.map(|b| heatmap(b, plot.high, plot.low, 200)).unwrap_or_default();
 
-    h_flex()
+    v_flex()
         .size_full()
         .child(
-            // The plot is a positioning context; every bar inside is placed against it.
-            div()
-                .relative()
+            h_flex()
+                .w_full()
                 .flex_1()
-                .h_full()
-                .children(view.price_ticks.iter().map(|tick| gridline(tick.y, p.row_line)))
-                // The anchor line, drawn last so it sits over the grid: it is the zero of
-                // the percent axis and the only line worth picking out.
-                .children(view.last_y.map(|y| gridline(y, p.accent)))
-                .children(view.bars.iter().map(|bar| candle_marks(bar, cx)))
-                .into_any_element(),
+                .child(price_gutter(&plot, cx))
+                .child(plot_area(&plot, cx))
+                .child(heat_gutter(&heat, cx))
+                .child(percent_gutter(&plot, cx)),
         )
-        .child(price_axis(&view, cx))
-        .child(percent_axis(&view, cx))
+        .child(
+            h_flex()
+                .w_full()
+                .h(px(VOLUME_H))
+                .child(div().w(px(AXIS_W)))
+                .child(volume_area(&plot, cx))
+                .child(div().w(px(HEAT_W + PCT_W))),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .h(px(16.0))
+                .child(div().w(px(AXIS_W)))
+                .child(time_axis(&plot, cx))
+                .child(div().w(px(HEAT_W + PCT_W))),
+        )
         .into_any_element()
 }
 
-/// Percent gutter, outboard of the price gutter.
-///
-/// Zero sits on the last traded price, so every label reads as "how far from where the
-/// market is now" — the distance a scalper is actually sizing against.
-fn percent_axis(view: &ChartView, cx: &App) -> AnyElement {
+/// Price labels down the left, as on every trading chart.
+fn price_gutter(plot: &TickPlot, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
+    div()
+        .relative()
+        .w(px(AXIS_W))
+        .h_full()
+        .children(plot.price_ticks.iter().map(|t| axis_label(t.y, show(t.price), p.text_dim, 400.0)))
+        .children(plot.last_y.zip(plot.last).map(|(y, price)| axis_label(y, show(price), p.accent, 700.0)))
+        .into_any_element()
+}
 
-    let label = |y: f32, text: String, color: u32, weight: f32| {
-        div()
-            .absolute()
-            .top(relative(y))
-            .right_0()
-            .child(
-                MoonText::new(text).font_size(10.0).mono(true).uppercase(false).weight(weight).color(color),
-            )
-            .into_any_element()
-    };
-
+/// Distance from the last price, outboard on the right.
+fn percent_gutter(plot: &TickPlot, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
     div()
         .relative()
         .w(px(PCT_W))
         .h_full()
         .children(
-            view.price_ticks
+            plot.price_ticks
                 .iter()
-                // The anchor gets its own emphatic label below; skip the grid tick that
-                // lands on top of it rather than printing two numbers in one place.
+                // The tick that lands on the anchor is skipped: `0.00%` is printed there
+                // instead, and two numbers in one place read worse than one.
                 .filter(|t| t.percent.abs() > rust_decimal::Decimal::new(5, 3))
-                .map(|t| label(t.y, format!("{:+.2}%", t.percent), p.text_dim, 400.0)),
+                .map(|t| axis_label(t.y, format!("{:+.2}%", t.percent), p.text_dim, 400.0)),
         )
-        .children(view.last_y.map(|y| label(y, "0.00%".into(), p.accent, 700.0)))
+        .children(plot.last_y.map(|y| axis_label(y, "0.00%".into(), p.accent, 700.0)))
+        .into_any_element()
+}
+
+fn axis_label(y: f32, text: String, color: u32, weight: f32) -> AnyElement {
+    div()
+        .absolute()
+        .top(relative(y))
+        .right_0()
+        .child(MoonText::new(text).font_size(10.0).mono(true).uppercase(false).weight(weight).color(color))
+        .into_any_element()
+}
+
+fn plot_area(plot: &TickPlot, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+
+    div()
+        .relative()
+        .flex_1()
+        .h_full()
+        .children(plot.price_ticks.iter().map(|t| gridline(t.y, p.row_line)))
+        .children(plot.time_ticks.iter().map(|t| vertical_gridline(t.x, p.row_line)))
+        // The anchor line last of the guides, so it sits over the grid rather than under it.
+        .children(plot.last_y.map(|y| gridline(y, p.accent)))
+        .children(plot.steps.iter().map(|s| step_segment(s, p.blue)))
+        .children(plot.marks.iter().map(|m| print_mark(m, cx)))
         .into_any_element()
 }
 
@@ -328,64 +368,114 @@ fn gridline(y: f32, color: u32) -> AnyElement {
         .right_0()
         .top(relative(y))
         .h(px(1.0))
-        .bg(rgba((color << 8) | 0x66))
+        .bg(rgba((color << 8) | 0x55))
         .into_any_element()
 }
 
-/// One candle: the wick as a hairline, the body as a filled block.
-fn candle_marks(bar: &Bar, cx: &App) -> AnyElement {
-    let p = MoonPalette::active(cx);
-    let color = if bar.rising { p.green } else { p.red };
-
-    let top = bar.open_y.min(bar.close_y);
-    let height = (bar.open_y - bar.close_y).abs();
-
-    let body = div()
+fn vertical_gridline(x: f32, color: u32) -> AnyElement {
+    div()
         .absolute()
-        .left(relative(bar.x - bar.half_width))
-        .w(relative(bar.half_width * 2.0))
-        .top(relative(top))
-        .bg(rgba((color << 8) | 0xEE));
+        .top_0()
+        .bottom_0()
+        .left(relative(x))
+        .w(px(1.0))
+        .bg(rgba((color << 8) | 0x33))
+        .into_any_element()
+}
 
-    // A candle that opened and closed at the same price has no body to draw; a hairline
-    // keeps it on the chart instead of silently vanishing.
-    let body = if height < MIN_BODY { body.h(px(1.5)) } else { body.h(relative(height)) };
+/// One flat run of the last-price line.
+fn step_segment(step: &Step, color: u32) -> AnyElement {
+    div()
+        .absolute()
+        .left(relative(step.x))
+        .w(relative((step.to_x - step.x).max(0.0)))
+        .top(relative(step.y))
+        .h(px(1.5))
+        .bg(rgba((color << 8) | 0xCC))
+        .into_any_element()
+}
+
+/// One print. Size follows the fill, colour follows the aggressor.
+fn print_mark(mark: &Mark, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let color = if mark.buy { p.green } else { p.red };
+    let size = MARK_MIN + (MARK_MAX - MARK_MIN) * mark.weight;
 
     div()
         .absolute()
-        .inset_0()
-        .child(
-            div()
-                .absolute()
-                .left(relative(bar.x))
-                .w(px(1.0))
-                .top(relative(bar.high_y))
-                .h(relative(bar.low_y - bar.high_y))
-                .bg(rgba((color << 8) | 0x99)),
-        )
-        .child(body)
+        .left(relative(mark.x))
+        .top(relative(mark.y))
+        .w(px(size))
+        .h(px(size))
+        .rounded_sm()
+        .bg(rgba((color << 8) | 0xDD))
         .into_any_element()
 }
 
-/// Price gutter down the right-hand edge, with the last price picked out.
-fn price_axis(view: &ChartView, cx: &App) -> AnyElement {
+/// Depth alongside the plot, on the same price scale: asks above the touch, bids below.
+fn heat_gutter(rows: &[HeatRow], cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-
-    let label = |y: f32, text: String, color: u32| {
-        div()
-            .absolute()
-            .top(relative(y))
-            .right_0()
-            .child(MoonText::new(text).font_size(10.0).mono(true).uppercase(false).color(color))
-            .into_any_element()
-    };
 
     div()
         .relative()
-        .w(px(AXIS_W))
+        .w(px(HEAT_W))
         .h_full()
-        .children(view.price_ticks.iter().map(|t| label(t.y, show(t.price), p.text_dim)))
-        .children(view.last.zip(view.last_y).map(|(price, y)| label(y, show(price), p.accent)))
+        .children(rows.iter().map(|row| {
+            let color = if row.ask { p.red } else { p.green };
+            div()
+                .absolute()
+                .left_0()
+                .top(relative(row.y))
+                .w(px(HEAT_W * row.fill))
+                .h(px(2.0))
+                .bg(rgba((color << 8) | 0xAA))
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+/// Traded size under the plot, split by which side crossed.
+fn volume_area(plot: &TickPlot, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+
+    div()
+        .relative()
+        .flex_1()
+        .h_full()
+        .children(plot.volume.iter().map(|bar| {
+            let color = if bar.buy { p.green } else { p.red };
+            div()
+                .absolute()
+                .left(relative(bar.x - bar.half_width))
+                .w(relative(bar.half_width * 2.0))
+                .bottom_0()
+                .h(relative(bar.height))
+                .bg(rgba((color << 8) | 0x99))
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+fn time_axis(plot: &TickPlot, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+
+    div()
+        .relative()
+        .flex_1()
+        .h_full()
+        .children(plot.time_ticks.iter().map(|tick| {
+            div()
+                .absolute()
+                .left(relative(tick.x))
+                .child(
+                    MoonText::new(clock::hms(tick.at_millis))
+                        .font_size(10.0)
+                        .mono(true)
+                        .uppercase(false)
+                        .color(p.text_dim),
+                )
+                .into_any_element()
+        }))
         .into_any_element()
 }
 

@@ -40,8 +40,9 @@ const MARKETS: [MarketKind; 2] = [MarketKind::Spot, MarketKind::LinearPerp];
 /// Order sizes offered on the toolbar, in quote currency.
 const SIZE_PRESETS: [&str; 6] = ["50", "100", "250", "500", "1000", "2500"];
 
-/// How many bars fit across the chart. Fewer bars is a closer look, not a different series.
-const ZOOM_PRESETS: [usize; 4] = [30, 60, 120, 240];
+/// How much wall-clock time the plot covers. Zoom moves the window, not the data.
+const SPANS: [(&str, i64); 5] =
+    [("30s", 30_000), ("1m", 60_000), ("5m", 300_000), ("15m", 900_000), ("1h", 3_600_000)];
 
 /// Dock tabs, in the order they appear.
 const DOCK_TABS: [&str; 4] = ["Time & Sales", "Instruments", "Core Status", "Log"];
@@ -301,19 +302,14 @@ impl TerminalView {
         }))
     }
 
-    /// The chart, with its own zoom strip above it.
+    /// The plot, with its own span strip above it.
     ///
-    /// Zoom changes how many bars are shown, not which series is drawn — the bars themselves
-    /// are cut by print count in the core and do not change when you look closer.
+    /// The span moves the window over the tape; it does not change the data. Every print in
+    /// range is drawn either way, so zooming out never silently aggregates anything away.
     fn chart_pane(&self, state: &FeedState, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let bars = ZOOM_PRESETS[self.zoom.min(ZOOM_PRESETS.len() - 1)];
-        let bucketing = state
-            .candles
-            .get(key)
-            .and_then(|s| s.back())
-            .map(|c| c.bucketing.label())
-            .unwrap_or_else(|| "—".into());
+        let (_, span_ms) = SPANS[self.zoom.min(SPANS.len() - 1)];
+        let prints = state.tape.get(key).map_or(0, |t| t.len());
 
         div().flex_1().h_full().child(
             v_flex()
@@ -328,24 +324,31 @@ impl TerminalView {
                         .gap_2()
                         .items_center()
                         .child(
-                            MoonText::new(bucketing)
+                            MoonText::new(key.strip_prefix("binance:").unwrap_or(key).to_string())
+                                .font_size(10.0)
+                                .mono(true)
+                                .uppercase(false)
+                                .color(p.text_muted),
+                        )
+                        .child(
+                            MoonText::new(format!("{prints} prints"))
                                 .font_size(10.0)
                                 .mono(true)
                                 .uppercase(false)
                                 .color(p.text_dim),
                         )
                         .child(div().flex_1())
-                        .child(MoonText::new("bars").font_size(10.0).color(p.text_dim).tracking(0.5))
-                        .children(ZOOM_PRESETS.iter().enumerate().map(|(index, count)| {
+                        .child(MoonText::new("span").font_size(10.0).color(p.text_dim).tracking(0.5))
+                        .children(SPANS.iter().enumerate().map(|(index, (label, _))| {
                             let selected = index == self.zoom;
                             div()
-                                .id(SharedString::from(format!("zoom-{count}")))
+                                .id(SharedString::from(format!("span-{label}")))
                                 .px_2()
                                 .rounded_sm()
                                 .bg(rgba(((if selected { p.accent } else { p.surface }) << 8) | 0xFF))
                                 .cursor_pointer()
                                 .child(
-                                    MoonText::new(count.to_string())
+                                    MoonText::new(label.to_string())
                                         .font_size(10.0)
                                         .mono(true)
                                         .uppercase(false)
@@ -357,7 +360,7 @@ impl TerminalView {
                                 }))
                         })),
                 )
-                .child(div().flex_1().w_full().child(panels::chart(state, key, bars, cx))),
+                .child(div().flex_1().w_full().child(panels::chart(state, key, span_ms, cx))),
         )
     }
 

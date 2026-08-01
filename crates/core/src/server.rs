@@ -76,6 +76,10 @@ async fn session(
                     // Hand over current state, then let the stream carry it forward. Without
                     // this a terminal joining after the books were built receives deltas for
                     // books it does not have and stays blank.
+                    for trade in state.tape_for(session.subscriptions()) {
+                        let event = Event::market(now(), MarketEvent::Trade(trade));
+                        send(&mut tx, &ServerMsg::Event(Box::new(event))).await?;
+                    }
                     for candle in state.candles_for(session.subscriptions()) {
                         let event = Event::market(now(), MarketEvent::Candle(candle));
                         send(&mut tx, &ServerMsg::Event(Box::new(event))).await?;
