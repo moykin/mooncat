@@ -15,9 +15,11 @@
 use serde::{Deserialize, Serialize};
 
 pub mod codec;
+pub mod frame;
 pub mod session;
 
 pub use codec::{decode_client, decode_server, encode, CodecError, MAX_FRAME_BYTES};
+pub use frame::{Direction, Frame};
 pub use session::{Auth, Session};
 
 /// Bumped whenever a message changes shape. Mismatched peers are rejected at Hello rather

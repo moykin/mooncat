@@ -72,11 +72,14 @@ Stated plainly, because the crate table above reads like more than there is.
 | Missing | Consequence today |
 |---|---|
 | **The entire order path** | `AccountEvent` has no producer and no `TradingVenue` is implemented. The core streams market data and nothing else — it cannot place, amend or cancel anything |
-| **TLS on the wire** | `MOON_TOKEN` crosses the network in the clear, so the core is only safe on loopback. This is why the default bind is `127.0.0.1` |
-| **Tests on `core/src/server.rs`** | The handshake, the start-of-session state handover and `Lagged` handling have zero coverage — 141 lines carrying the connection lifecycle |
 | **Priority separation in the fanout** | One `broadcast` of 8 192 carries everything. When executions start flowing they will queue behind book deltas, and the fix is much cheaper before that happens than after |
 | **Persistence** | Nothing is written to disk. Restarting the core loses the tape, the candles and the read-model |
+| **Envelopes and channels** | `wire::frame` carries bytes correctly, but the messages inside are still the flat `ClientMsg`/`ServerMsg` pair. Channels, request ids and acknowledgements arrive with roadmap tasks 1.3–1.8 |
 | **`std::mem::forget` in `main.rs`** | Connectors are leaked deliberately to keep their socket tasks alive. It works, but it means the core has no clean shutdown path |
+
+Closed since this section was written: TLS on the wire (`wss://` with rustls, and the core
+refuses to start in plaintext anywhere but loopback), tests on `core/src/server.rs` (thirteen,
+against a real socket), `/metrics` and `/health`, and configuration from a file.
 
 Planning documents — reverse-engineering reports, target architecture, protocol spec and the
 phased roadmap — live in `../moon-plan/`.
@@ -162,7 +165,7 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace                 # 167 tests
+cargo test --workspace                 # 183 tests
 cargo clippy --workspace --all-targets
 
 cd crates/terminal && cargo test       # 41 more, separate workspace

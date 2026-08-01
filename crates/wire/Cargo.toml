@@ -13,6 +13,8 @@ exchange = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+zstd = { workspace = true }
+rmpv = { workspace = true }
 
 [dev-dependencies]
 futures-util = { workspace = true }
@@ -20,4 +22,3 @@ tokio = { workspace = true, features = ["net"] }
 tokio-tungstenite = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
-rmpv = { workspace = true }
