@@ -1,0 +1,27 @@
+[package]
+name = "core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The trading core: runs connectors on a VPS and serves terminals."
+
+[[bin]]
+name = "mooncore"
+path = "src/main.rs"
+
+[dev-dependencies]
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+
+[dependencies]
+binance = { workspace = true }
+domain = { workspace = true }
+exchange = { workspace = true }
+wire = { workspace = true }
+
+futures-util = { workspace = true }
+tokio = { workspace = true, features = ["net", "signal"] }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

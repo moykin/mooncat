@@ -1,0 +1,22 @@
+[package]
+name = "wire"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The core↔terminal protocol: messages, framing and session rules."
+
+[dependencies]
+domain = { workspace = true }
+exchange = { workspace = true }
+
+rmp-serde = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+futures-util = { workspace = true }
+tokio = { workspace = true, features = ["net"] }
+tokio-tungstenite = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }

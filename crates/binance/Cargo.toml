@@ -9,6 +9,7 @@ description = "Binance connector: spot and USD-M perpetuals behind one implement
 [dependencies]
 domain = { workspace = true }
 exchange = { workspace = true }
+marketdata = { workspace = true }
 
 async-trait = { workspace = true }
 futures-util = { workspace = true }

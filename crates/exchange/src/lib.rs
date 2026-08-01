@@ -78,7 +78,9 @@ impl std::fmt::Debug for Credentials {
 }
 
 /// What market data to stream for an instrument.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Serialisable because a terminal asks for these across the wire.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Subscription {
     /// Public trade tape.
     Trades(Symbol),
@@ -88,6 +90,17 @@ pub enum Subscription {
         symbol: Symbol,
         interval_ms: i64,
     },
+}
+
+impl Subscription {
+    /// The instrument this subscription concerns. Used to route a request to the connector
+    /// that owns its market, and to decide which sessions an event belongs to.
+    pub fn symbol(&self) -> &Symbol {
+        match self {
+            Self::Trades(s) | Self::Book(s) => s,
+            Self::Candles { symbol, .. } => symbol,
+        }
+    }
 }
 
 /// Public market data. Requires no credentials.

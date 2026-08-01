@@ -30,6 +30,22 @@ pub enum MarketEvent {
     },
 }
 
+impl MarketEvent {
+    /// The instrument this event concerns, when it concerns exactly one.
+    ///
+    /// `None` means it is not per-instrument (an instrument-list refresh), so it is
+    /// broadcast rather than filtered by subscription.
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self {
+            Self::Trade(t) => Some(&t.symbol),
+            Self::BookSnapshot(b) => b.symbol.as_ref(),
+            Self::BookDelta(d) => Some(&d.symbol),
+            Self::Candle(c) => Some(&c.symbol),
+            Self::Instruments { .. } => None,
+        }
+    }
+}
+
 /// Private data. Never leaves the core except over an authenticated connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccountEvent {
