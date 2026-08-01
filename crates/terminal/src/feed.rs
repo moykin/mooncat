@@ -15,6 +15,12 @@ use wire::{ClientMsg, ServerMsg, PROTOCOL_VERSION};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 
+/// Connection events kept for the log panel.
+///
+/// The log is the only place a resync, a reconnect or a venue drop leaves a trace once the
+/// status indicator has gone green again, so it outlives the condition it describes.
+const LOG_DEPTH: usize = 300;
+
 /// Trades kept per instrument for the tape.
 ///
 /// Bounded because a busy instrument prints faster than anyone reads, and an unbounded tape
@@ -55,6 +61,22 @@ pub struct FeedState {
     pub tape: BTreeMap<String, VecDeque<PublicTrade>>,
     /// Last thing the core said about its own health.
     pub core_note: Option<String>,
+    /// Newest first.
+    pub log: VecDeque<LogLine>,
+}
+
+/// One line in the log panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogLine {
+    pub at: i64,
+    pub text: String,
+    pub level: LogLevel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Warn,
 }
 
 impl Default for FeedState {
@@ -65,6 +87,7 @@ impl Default for FeedState {
             trades: BTreeMap::new(),
             tape: BTreeMap::new(),
             core_note: None,
+            log: VecDeque::new(),
         }
     }
 }
@@ -105,7 +128,23 @@ impl Feed {
 }
 
 fn set_status(state: &Arc<RwLock<FeedState>>, status: Status) {
-    state.write().unwrap_or_else(|e| e.into_inner()).status = status;
+    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+    let level = match status {
+        Status::Live => LogLevel::Info,
+        _ => LogLevel::Warn,
+    };
+    let text = status.label();
+    guard.status = status;
+    push_log(&mut guard, level, text);
+}
+
+fn push_log(state: &mut FeedState, level: LogLevel, text: String) {
+    // Repeating an unchanged line would bury everything else during a reconnect storm.
+    if state.log.front().is_some_and(|line| line.text == text) {
+        return;
+    }
+    state.log.push_front(LogLine { at: crate::clock::now_millis(), text, level });
+    state.log.truncate(LOG_DEPTH);
 }
 
 async fn run(state: Arc<RwLock<FeedState>>, url: String, token: String, subs: Vec<Subscription>) {
@@ -191,7 +230,9 @@ fn apply(state: &Arc<RwLock<FeedState>>, event: domain::Event) {
                 // than draw a book nobody can trade against.
                 if let ApplyOutcome::Gap { .. } = book.apply(&delta) {
                     guard.books.remove(&key);
-                    guard.core_note = Some(format!("{} desynced, waiting for a snapshot", delta.symbol));
+                    let note = format!("{} desynced, waiting for a snapshot", delta.symbol);
+                    guard.core_note = Some(note.clone());
+                    push_log(&mut guard, LogLevel::Warn, note);
                 }
             }
         }
@@ -203,10 +244,18 @@ fn apply(state: &Arc<RwLock<FeedState>>, event: domain::Event) {
             tape.push_front(trade);
             tape.truncate(TAPE_DEPTH);
         }
-        Payload::Connection(ConnectionEvent::Resyncing { reason }) => guard.core_note = Some(reason),
-        Payload::Connection(ConnectionEvent::Ready) => guard.core_note = None,
+        Payload::Connection(ConnectionEvent::Resyncing { reason }) => {
+            guard.core_note = Some(reason.clone());
+            push_log(&mut guard, LogLevel::Info, reason);
+        }
+        Payload::Connection(ConnectionEvent::Ready) => {
+            guard.core_note = None;
+            push_log(&mut guard, LogLevel::Info, "core feed ready".into());
+        }
         Payload::Connection(ConnectionEvent::Disconnected { reason }) => {
-            guard.core_note = Some(format!("core lost its venue feed: {reason}"));
+            let note = format!("core lost its venue feed: {reason}");
+            guard.core_note = Some(note.clone());
+            push_log(&mut guard, LogLevel::Warn, note);
         }
         _ => {}
     }
@@ -319,6 +368,43 @@ mod tests {
 
         apply(&state, Event::connection(Timestamp::from_millis(2), ConnectionEvent::Ready));
         assert!(state.read().unwrap().core_note.is_none());
+    }
+
+    #[test]
+    fn the_log_keeps_what_the_status_indicator_forgets() {
+        let state = state();
+        apply(
+            &state,
+            Event::connection(
+                Timestamp::from_millis(1),
+                ConnectionEvent::Resyncing { reason: "rebuilding book".into() },
+            ),
+        );
+        apply(&state, Event::connection(Timestamp::from_millis(2), ConnectionEvent::Ready));
+
+        let guard = state.read().unwrap();
+        // The note is cleared once healthy, but the log still shows what happened.
+        assert!(guard.core_note.is_none());
+        assert_eq!(guard.log.len(), 2);
+        assert_eq!(guard.log[0].text, "core feed ready");
+        assert_eq!(guard.log[1].text, "rebuilding book");
+    }
+
+    #[test]
+    fn a_repeated_line_is_not_logged_twice() {
+        // During a reconnect storm the same reason arrives over and over; letting it repeat
+        // buries every other line in the panel.
+        let state = state();
+        for _ in 0..5 {
+            apply(
+                &state,
+                Event::connection(
+                    Timestamp::from_millis(1),
+                    ConnectionEvent::Resyncing { reason: "rebuilding book".into() },
+                ),
+            );
+        }
+        assert_eq!(state.read().unwrap().log.len(), 1);
     }
 
     #[test]
