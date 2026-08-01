@@ -16,8 +16,13 @@ thiserror = { workspace = true }
 zstd = { workspace = true }
 rmpv = { workspace = true }
 serde_bytes = { workspace = true }
+tokio-rustls = { workspace = true }
+x509-parser = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
+rustls-pemfile = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
 tokio-tungstenite = { workspace = true }
