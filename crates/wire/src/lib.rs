@@ -18,6 +18,7 @@ pub mod batch;
 pub mod codec;
 pub mod command;
 pub mod envelope;
+pub mod event;
 pub mod frame;
 pub mod session;
 
@@ -28,6 +29,7 @@ pub use envelope::{
     accept_client, accept_server, Channel, ClientEnvelope, Incoming, ReqId, ServerEnvelope, SkipCounters,
     Skipped, SymbolId, KNOWN_VER,
 };
+pub use event::{AckCode, AckDetail, AckStatus, ServerEvent};
 pub use frame::{Direction, Frame};
 pub use session::{Auth, Session};
 
