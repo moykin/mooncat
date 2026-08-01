@@ -38,6 +38,13 @@ pub struct OrderBook {
     /// Venue sequence number of the last applied update.
     pub last_update_id: u64,
     pub ts: Timestamp,
+    /// False until a delta has been chained onto the snapshot.
+    ///
+    /// A REST snapshot is taken at a moment the delta stream has usually not reached yet,
+    /// so the two do not line up. Until they do, a delta whose predecessor is older than
+    /// the snapshot is the expected overlap, not a gap — see [`OrderBook::apply`].
+    #[serde(default)]
+    pub synced: bool,
 }
 
 /// One incremental book update as published by the venue.
@@ -87,11 +94,28 @@ impl OrderBook {
 
     /// Apply an incremental update, reporting staleness and sequence gaps rather than
     /// silently corrupting the book.
+    ///
+    /// Two regimes, and conflating them is what makes a book resync forever:
+    ///
+    /// * **Attaching to a snapshot** (`synced == false`). The snapshot is normally *ahead*
+    ///   of the live stream, so deltas arrive that the snapshot already contains. Those are
+    ///   [`ApplyOutcome::Stale`]. The first delta that spans the snapshot — its predecessor
+    ///   at or before the snapshot id, its own id past it — is the join, and applying it
+    ///   makes the book synced.
+    /// * **Chained** (`synced == true`). Every delta must name our current id as its
+    ///   predecessor. Anything else means the venue skipped updates.
     pub fn apply(&mut self, delta: &BookDelta) -> ApplyOutcome {
         if delta.last_update_id <= self.last_update_id {
             return ApplyOutcome::Stale;
         }
-        if self.last_update_id != 0 && delta.prev_update_id != self.last_update_id {
+
+        let continues = if self.synced {
+            delta.prev_update_id == self.last_update_id
+        } else {
+            // The stream may still be behind the snapshot; it may not be ahead of it.
+            delta.prev_update_id <= self.last_update_id
+        };
+        if !continues {
             return ApplyOutcome::Gap { expected: self.last_update_id, got: delta.prev_update_id };
         }
 
@@ -99,6 +123,7 @@ impl OrderBook {
         apply_side(&mut self.asks, &delta.asks, false);
         self.last_update_id = delta.last_update_id;
         self.ts = delta.ts;
+        self.synced = true;
         ApplyOutcome::Applied
     }
 }
@@ -213,6 +238,52 @@ mod tests {
         // Crucially the book was left untouched, so a resync starts from a known state.
         assert_eq!(book.last_update_id, 10);
         assert_eq!(book.best_bid().unwrap().qty, dec!(1));
+    }
+
+    #[test]
+    fn a_snapshot_ahead_of_the_stream_waits_for_the_delta_that_spans_it() {
+        // The live failure this came from: the REST snapshot is taken later than the point
+        // the delta stream has reached, so the first deltas name a predecessor older than
+        // the snapshot. Treating those as gaps resyncs forever and never builds a book.
+        let mut book = OrderBook { last_update_id: 1_000, ..Default::default() };
+        assert!(!book.synced);
+
+        // Already contained in the snapshot: dropped, no gap raised.
+        assert_eq!(book.apply(&delta(940, 960, vec![(dec!(100), dec!(1))], vec![])), ApplyOutcome::Stale);
+        assert_eq!(book.apply(&delta(960, 1_000, vec![], vec![])), ApplyOutcome::Stale);
+
+        // Spans the snapshot: predecessor at or before 1000, own id past it. This is the join.
+        assert_eq!(book.apply(&delta(990, 1_010, vec![(dec!(100), dec!(7))], vec![])), ApplyOutcome::Applied);
+        assert!(book.synced);
+        assert_eq!(book.last_update_id, 1_010);
+        assert_eq!(book.best_bid().unwrap().qty, dec!(7));
+    }
+
+    #[test]
+    fn once_synced_the_chain_is_strict_again() {
+        let mut book = OrderBook { last_update_id: 1_000, ..Default::default() };
+        book.apply(&delta(990, 1_010, vec![], vec![]));
+        assert!(book.synced);
+
+        // The tolerance used to attach to the snapshot must not survive the join, or a real
+        // dropped update would be applied as if nothing were missing.
+        assert_eq!(
+            book.apply(&delta(1_005, 1_020, vec![], vec![])),
+            ApplyOutcome::Gap { expected: 1_010, got: 1_005 }
+        );
+        assert_eq!(book.apply(&delta(1_010, 1_020, vec![], vec![])), ApplyOutcome::Applied);
+    }
+
+    #[test]
+    fn a_stream_that_ran_past_the_snapshot_demands_a_newer_one() {
+        // Opposite race: the snapshot is too old to attach to, so there is no join to wait
+        // for and the caller must fetch again.
+        let mut book = OrderBook { last_update_id: 1_000, ..Default::default() };
+        assert_eq!(
+            book.apply(&delta(1_500, 1_520, vec![], vec![])),
+            ApplyOutcome::Gap { expected: 1_000, got: 1_500 }
+        );
+        assert!(!book.synced);
     }
 
     #[test]

@@ -1,0 +1,28 @@
+[package]
+name = "binance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Binance connector: spot and USD-M perpetuals behind one implementation."
+
+[dependencies]
+domain = { workspace = true }
+exchange = { workspace = true }
+
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rust_decimal_macros = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "live_feed"
