@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod admission;
 pub mod auth;
 pub mod batch;
 pub mod codec;
@@ -21,10 +22,12 @@ pub mod command;
 pub mod envelope;
 pub mod event;
 pub mod frame;
+pub mod heartbeat;
 pub mod idempotency;
 pub mod pin;
 pub mod session;
 
+pub use admission::{authorize, Admit, Gatekeeper, SessionId};
 pub use auth::{DeviceId, DeviceKey, DeviceRegistry, Transcript};
 pub use batch::{Batch, Batcher, FlushReason};
 pub use codec::{decode_client, decode_server, encode, CodecError, MAX_FRAME_BYTES};
@@ -35,6 +38,7 @@ pub use envelope::{
 };
 pub use event::{AckCode, AckDetail, AckStatus, ServerEvent};
 pub use frame::{Direction, Frame};
+pub use heartbeat::{Heartbeat, PongOutcome};
 pub use idempotency::{Admission, ReqRing, SEEN_REQ_CAPACITY};
 pub use pin::{PinnedVerifier, SpkiPin};
 pub use session::{Auth, Session};
