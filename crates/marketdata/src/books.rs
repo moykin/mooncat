@@ -53,6 +53,13 @@ pub struct Outcome {
     /// updates must not be forwarded: a consumer applying them to its own copy would end up
     /// with a book that disagrees with ours, which is worse than having none.
     pub forward: bool,
+    /// The book just became usable and consumers must be sent it in full.
+    ///
+    /// A snapshot does not always join the stream during replay — when the snapshot is ahead
+    /// of the stream, the joining delta arrives later, through here. Publishing only from
+    /// the replay path leaves such a book alive inside the connector and invisible outside,
+    /// which is what kept spot books from ever reaching the terminal.
+    pub attached: bool,
 }
 
 #[derive(Debug)]
@@ -101,24 +108,29 @@ impl BookSet {
         if entry.book.is_none() {
             entry.buffer(delta);
             let need = entry.request_snapshot(now, self.cooldown_ms);
-            return Outcome { need, forward: false };
+            return Outcome { need, forward: false, attached: false };
         }
 
         let book = entry.book.as_mut().expect("checked above");
+        let was_synced = book.synced;
+
         match book.apply(&delta) {
             ApplyOutcome::Applied => {
                 entry.updated_at = now;
-                Outcome { need: Need::Nothing, forward: true }
+                // First delta to chain onto the snapshot: consumers have never seen this
+                // book, so send the whole thing rather than an update to nothing.
+                let attached = !was_synced;
+                Outcome { need: Need::Nothing, forward: !attached, attached }
             }
             // Normal overlap right after a snapshot.
-            ApplyOutcome::Stale => Outcome { need: Need::Nothing, forward: false },
+            ApplyOutcome::Stale => Outcome { need: Need::Nothing, forward: false, attached: false },
             ApplyOutcome::Gap { .. } => {
                 // Anything rendered from here would be fiction. Drop the book, keep the
                 // update that exposed the gap, and rebuild.
                 entry.book = None;
                 entry.buffer(delta);
                 let need = entry.request_snapshot(now, self.cooldown_ms);
-                Outcome { need, forward: false }
+                Outcome { need, forward: false, attached: false }
             }
         }
     }
@@ -133,14 +145,28 @@ impl BookSet {
 
         entry.awaiting = false;
         let buffered = std::mem::take(&mut entry.buffered);
+        let span = buffered.first().map(|d| (d.prev_update_id, d.last_update_id));
+        let last = buffered.last().map(|d| d.last_update_id);
+
         for delta in &buffered {
-            if let ApplyOutcome::Gap { .. } = snapshot.apply(delta) {
+            if let ApplyOutcome::Gap { expected, got } = snapshot.apply(delta) {
                 // The stream ran past this snapshot while it was in flight. Keep the
                 // remaining updates and let the caller fetch a newer one.
+                tracing::debug!(
+                    snapshot = expected,
+                    delta_prev = got,
+                    buffered = buffered.len(),
+                    "snapshot too old for the buffered updates"
+                );
                 entry.book = None;
                 return None;
             }
         }
+        tracing::debug!(
+            snapshot = snapshot.last_update_id, ?span, buffered_last = ?last,
+            buffered = buffered.len(), joined = snapshot.synced,
+            "snapshot replayed"
+        );
 
         entry.updated_at = now;
         let joined = snapshot.synced;
@@ -337,6 +363,37 @@ mod tests {
 
         assert!(books.stale(at(3_000), 5_000).is_empty());
         assert_eq!(books.stale(at(10_000), 5_000), vec![sym()]);
+    }
+
+    #[test]
+    fn a_book_that_joins_later_is_still_announced_to_consumers() {
+        // The bug: a snapshot ahead of the stream does not join during replay. The joining
+        // delta arrives from the socket afterwards, and publishing only from the replay path
+        // left such a book alive inside the connector and invisible outside — spot books
+        // never reached the terminal at all.
+        let mut books = BookSet::default();
+        books.on_delta(delta(990, 1_000, dec!(1)), at(0));
+
+        // Snapshot is ahead of everything buffered: nothing chains, nothing is published.
+        assert!(books.install_snapshot(snapshot(2_000), at(10)).is_none());
+        assert!(books.book(&sym().key()).is_none());
+
+        // Stream is still behind: dropped as the expected overlap, still nothing to announce.
+        let out = books.on_delta(delta(1_500, 1_900, dec!(2)), at(20));
+        assert!(!out.attached);
+        assert!(!out.forward);
+
+        // And now the delta that spans the snapshot. This is the moment consumers must be
+        // handed the whole book.
+        let out = books.on_delta(delta(1_990, 2_010, dec!(3)), at(30));
+        assert!(out.attached, "the join must be announced");
+        assert!(!out.forward, "a delta is useless to a consumer with no book");
+        assert_eq!(books.book(&sym().key()).unwrap().best_bid().unwrap().qty, dec!(3));
+
+        // Afterwards it is an ordinary chained stream again.
+        let out = books.on_delta(delta(2_010, 2_020, dec!(4)), at(40));
+        assert!(!out.attached);
+        assert!(out.forward);
     }
 
     #[test]

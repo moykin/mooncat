@@ -9,6 +9,8 @@ description = "Order book maintenance: snapshot attachment, gap recovery, stalen
 [dependencies]
 domain = { workspace = true }
 
+tracing = { workspace = true }
+
 [dev-dependencies]
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }

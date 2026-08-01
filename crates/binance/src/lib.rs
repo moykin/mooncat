@@ -286,8 +286,13 @@ async fn pump(
 
             Some(result) = snap_rx.recv() => match result {
                 SnapshotResult::Fetched(snapshot) => {
-                    if let Some(joined) = books.install_snapshot(snapshot, now()) {
-                        ctx.sink.send(Event::market(now(), MarketEvent::BookSnapshot(joined)));
+                    let (sym, id) = (snapshot.symbol.clone(), snapshot.last_update_id);
+                    match books.install_snapshot(snapshot, now()) {
+                        Some(joined) => {
+                            tracing::debug!(symbol = ?sym, id, "snapshot joined the stream");
+                            ctx.sink.send(Event::market(now(), MarketEvent::BookSnapshot(joined)));
+                        }
+                        None => tracing::debug!(symbol = ?sym, id, "snapshot did not join"),
                     }
                 }
                 SnapshotResult::Failed(symbol) => books.snapshot_failed(&symbol),
@@ -321,9 +326,15 @@ fn on_delta(
     delta: BookDelta,
     snap_tx: &mpsc::UnboundedSender<SnapshotResult>,
 ) {
+    let key = delta.symbol.key();
     let outcome = books.on_delta(delta.clone(), now());
 
-    if outcome.forward {
+    if outcome.attached {
+        // The book only just became usable; consumers have no copy to update.
+        if let Some(book) = books.book(&key) {
+            ctx.sink.send(Event::market(now(), MarketEvent::BookSnapshot(book.clone())));
+        }
+    } else if outcome.forward {
         ctx.sink.send(Event::market(now(), MarketEvent::BookDelta(delta)));
     }
 
