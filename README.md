@@ -27,10 +27,17 @@ export MOON_TOKEN=$(openssl rand -hex 24)
 cargo run -p core --bin mooncore -- BTCUSDT
 ```
 
-Terminal, from anywhere that can reach it:
+Terminal — a real window, from anywhere that can reach the core:
 
 ```bash
-MOON_TOKEN=… MOON_CORE=ws://127.0.0.1:8787 cargo run -p wire --example terminal -- BTCUSDT
+cd crates/terminal
+MOON_TOKEN=… MOON_CORE=ws://127.0.0.1:8787 cargo run --bin moonterm -- BTCUSDT ETHUSDT
+```
+
+Or the same thing without pixels, useful for diagnosing:
+
+```bash
+MOON_TOKEN=… cargo run -p wire --example terminal -- BTCUSDT
 ```
 
 Connector on its own, without a core:
@@ -52,8 +59,22 @@ make deliberately, alongside a firewall rule.
 | `binance` | Spot and USD-M perpetuals behind one implementation |
 | `wire` | The core↔terminal protocol: messages, framing, session rules |
 | `core` | The `mooncore` binary: connectors, read-model, WebSocket server |
+| `terminal` | The `moonterm` window: GPUI + MoonUI, reads state on the frame tick |
 
-Planned: `oms`, `risk`, `strategy`, `storage`, and the GPUI terminal.
+Planned: `oms`, `risk`, `strategy`, `storage`.
+
+### Why `terminal` is a separate workspace
+
+`core-foundation-sys` declares `links`, so one dependency graph admits exactly one version of
+it — and MoonUI's macOS backend and reqwest's TLS verifier want different ones. The core ships
+to a VPS and the terminal to a laptop; they share only `domain`, `wire` and `exchange`, none of
+which touch reqwest. Splitting the graph costs nothing and removes the conflict at its root.
+
+### Toolchain
+
+Pinned to **1.97.1** in `rust-toolchain.toml`. MoonUI uses library features that landed after
+1.91 (`slice_as_array` among them), so an older stable fails to compile it with a message that
+points at MoonUI rather than at the toolchain.
 
 ## Decisions that are load-bearing
 
@@ -88,6 +109,10 @@ did not have and sat blank forever. The core keeps a read-model and hands a sess
 state on subscribe; queued deltas older than that state are discarded as stale by the same
 `apply` rule.
 
+**`font-kit` is not an optional feature.** Without it the GPUI window opens, lays out
+correctly, and renders no text at all — which reads as a layout bug rather than a missing
+flag. One line in the manifest, twenty minutes to find.
+
 ## Known: the USD-M trade stream is silent from some networks
 
 `btcusdt@aggTrade` on `fstream.binance.com` is accepted (`LIST_SUBSCRIPTIONS` echoes it back)
@@ -113,6 +138,8 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace      # 91 tests
+cargo test --workspace                 # 91 tests
 cargo clippy --workspace --all-targets
+
+cd crates/terminal && cargo test       # 5 more, separate workspace
 ```

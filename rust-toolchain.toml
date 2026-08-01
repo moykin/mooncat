@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned rather than "stable" so a build is reproducible, and because MoonUI (the terminal's
+# UI layer) uses library features that only landed after 1.91 — `slice_as_array` among them.
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

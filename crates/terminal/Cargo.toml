@@ -1,0 +1,51 @@
+# A workspace of its own, deliberately.
+#
+# `core-foundation-sys` declares `links`, so a single dependency graph may contain exactly
+# one version of it — and MoonUI's macOS backend and reqwest's TLS verifier want different
+# ones. The two halves ship to different machines and share no code beyond `domain`, `wire`
+# and `exchange`, none of which touch reqwest, so splitting the graph costs nothing and
+# removes the conflict at its root.
+[workspace]
+
+[package]
+name = "terminal"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "The desktop terminal: a GPUI window onto a running core."
+
+[[bin]]
+name = "moonterm"
+path = "src/main.rs"
+
+[dependencies]
+domain = { path = "../domain" }
+exchange = { path = "../exchange" }
+wire = { path = "../wire" }
+
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+    "connect",
+    "handshake",
+    "rustls-tls-webpki-roots",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# MoonUI is Apache-2.0. Used as a library, not copied — see README.
+gpui = { git = "https://github.com/Moonbot-Tech/MoonUI", package = "moon-gpui", branch = "master" }
+# `font-kit` is not optional in practice: without it the window opens and renders no text
+# at all, which looks like a layout bug rather than a missing feature flag. x11/wayland are
+# inert on macOS and keep the Linux build working from the same manifest.
+gpui_platform = { git = "https://github.com/Moonbot-Tech/MoonUI", package = "moon-gpui-platform", branch = "master", features = [
+    "font-kit",
+    "x11",
+    "wayland",
+    "runtime_shaders",
+] }
+moon-ui = { git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+
+[dev-dependencies]
+rust_decimal = { version = "1", features = ["serde-with-str"] }

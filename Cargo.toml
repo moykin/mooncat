@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# `crates/terminal` is intentionally its own workspace — see its Cargo.toml.
+exclude = ["crates/terminal"]
 members = [
     "crates/binance",
     "crates/core",
