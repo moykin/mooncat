@@ -4,16 +4,22 @@
 //! tokio runtime. So the client runs on a thread of its own and publishes into shared state,
 //! and the UI reads that state on the frame tick. Nothing in the render path ever awaits.
 
-use domain::{ApplyOutcome, ConnectionEvent, MarketEvent, OrderBook, Payload};
+use domain::{ApplyOutcome, ConnectionEvent, MarketEvent, OrderBook, Payload, PublicTrade};
 use exchange::Subscription;
 use futures_util::{SinkExt, StreamExt};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 use wire::{ClientMsg, ServerMsg, PROTOCOL_VERSION};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+
+/// Trades kept per instrument for the tape.
+///
+/// Bounded because a busy instrument prints faster than anyone reads, and an unbounded tape
+/// is a memory leak with a scrollbar.
+const TAPE_DEPTH: usize = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -45,13 +51,21 @@ pub struct FeedState {
     pub status: Status,
     pub books: BTreeMap<String, OrderBook>,
     pub trades: BTreeMap<String, u64>,
+    /// Most recent trades first, capped at [`TAPE_DEPTH`].
+    pub tape: BTreeMap<String, VecDeque<PublicTrade>>,
     /// Last thing the core said about its own health.
     pub core_note: Option<String>,
 }
 
 impl Default for FeedState {
     fn default() -> Self {
-        Self { status: Status::Connecting, books: BTreeMap::new(), trades: BTreeMap::new(), core_note: None }
+        Self {
+            status: Status::Connecting,
+            books: BTreeMap::new(),
+            trades: BTreeMap::new(),
+            tape: BTreeMap::new(),
+            core_note: None,
+        }
     }
 }
 
@@ -182,7 +196,12 @@ fn apply(state: &Arc<RwLock<FeedState>>, event: domain::Event) {
             }
         }
         Payload::Market(MarketEvent::Trade(trade)) => {
-            *guard.trades.entry(trade.symbol.key()).or_default() += 1;
+            let key = trade.symbol.key();
+            *guard.trades.entry(key.clone()).or_default() += 1;
+
+            let tape = guard.tape.entry(key).or_default();
+            tape.push_front(trade);
+            tape.truncate(TAPE_DEPTH);
         }
         Payload::Connection(ConnectionEvent::Resyncing { reason }) => guard.core_note = Some(reason),
         Payload::Connection(ConnectionEvent::Ready) => guard.core_note = None,

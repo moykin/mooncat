@@ -59,7 +59,7 @@ make deliberately, alongside a firewall rule.
 | `binance` | Spot and USD-M perpetuals behind one implementation |
 | `wire` | The core↔terminal protocol: messages, framing, session rules |
 | `core` | The `mooncore` binary: connectors, read-model, WebSocket server |
-| `terminal` | The `moonterm` window: GPUI + MoonUI, reads state on the frame tick |
+| `terminal` | The `moonterm` window: order book, tape, instrument tabs |
 
 Planned: `oms`, `risk`, `strategy`, `storage`.
 
@@ -109,6 +109,12 @@ did not have and sat blank forever. The core keeps a read-model and hands a sess
 state on subscribe; queued deltas older than that state are discarded as stale by the same
 `apply` rule.
 
+**A book that joins the stream late was never announced.** A snapshot does not always attach
+during replay — when it is ahead of the stream, the joining delta arrives from the socket
+afterwards. Publishing `BookSnapshot` only from the replay path left such a book alive inside
+the connector and invisible outside, so spot books never reached the terminal at all and
+futures books appeared only when the timing happened to suit.
+
 **`font-kit` is not an optional feature.** Without it the GPUI window opens, lays out
 correctly, and renders no text at all — which reads as a layout bug rather than a missing
 flag. One line in the manifest, twenty minutes to find.
@@ -141,5 +147,5 @@ fair to study and reimplement; its source files are not fair to copy.
 cargo test --workspace                 # 91 tests
 cargo clippy --workspace --all-targets
 
-cd crates/terminal && cargo test       # 5 more, separate workspace
+cd crates/terminal && cargo test      # 14 more, separate workspace
 ```

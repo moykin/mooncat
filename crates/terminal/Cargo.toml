@@ -24,6 +24,7 @@ domain = { path = "../domain" }
 exchange = { path = "../exchange" }
 wire = { path = "../wire" }
 
+rust_decimal = { version = "1", features = ["serde-with-str"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = [
@@ -48,4 +49,4 @@ gpui_platform = { git = "https://github.com/Moonbot-Tech/MoonUI", package = "moo
 moon-ui = { git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 
 [dev-dependencies]
-rust_decimal = { version = "1", features = ["serde-with-str"] }
+rust_decimal_macros = "1"
