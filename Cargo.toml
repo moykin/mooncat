@@ -46,6 +46,8 @@ sha2 = "0.10"
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 rand = "0.9"
 hex = "0.4"
+ring = "0.17"
+keyring = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

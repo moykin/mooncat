@@ -22,6 +22,8 @@ sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
+ring = { workspace = true }
+keyring = { workspace = true, optional = true }
 
 [dev-dependencies]
 rustls-pemfile = { workspace = true }
@@ -30,3 +32,8 @@ tokio = { workspace = true, features = ["net"] }
 tokio-tungstenite = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
+
+[features]
+# The operating system credential store. Off by default: the core never needs it and
+# would otherwise pull a D-Bus dependency onto a headless VPS.
+os-keystore = ["dep:keyring"]

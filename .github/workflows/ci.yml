@@ -68,6 +68,12 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+      # The OS credential store is behind a feature the core does not enable, so nothing above
+      # compiles it. Checked separately on every platform, because the code inside it is the
+      # part that differs between them.
+      - name: os keystore builds on this platform
+        run: cargo clippy -p wire --features os-keystore --all-targets -- -D warnings
+
   terminal:
     name: terminal (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
