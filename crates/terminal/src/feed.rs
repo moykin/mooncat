@@ -398,7 +398,8 @@ mod tests {
             MarketEvent::Candle(Candle {
                 symbol: sym(),
                 open_time: Timestamp::from_millis(open_time),
-                interval_ms: 1_000,
+                bucketing: domain::Bucketing::Ticks { count: 25 },
+                trades: 1,
                 open: "100".parse().unwrap(),
                 high: "110".parse().unwrap(),
                 low: "90".parse().unwrap(),

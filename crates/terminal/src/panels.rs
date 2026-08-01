@@ -18,11 +18,10 @@ pub const DEPTH_ROWS: usize = 16;
 pub const TAPE_ROWS: usize = 40;
 /// Log lines shown at once.
 pub const LOG_ROWS: usize = 60;
-/// Candles across the chart.
-pub const CHART_BARS: usize = 90;
-
 /// Width of the price axis gutter.
 const AXIS_W: f32 = 74.0;
+/// Width of the percent axis gutter.
+const PCT_W: f32 = 58.0;
 /// A body thinner than this is drawn as a line, so a doji stays visible.
 const MIN_BODY: f32 = 0.004;
 
@@ -247,7 +246,7 @@ pub fn log(state: &FeedState, cx: &App) -> AnyElement {
 ///
 /// Bars are positioned in fractions of the pane rather than pixels, so the chart fills
 /// whatever space the layout gives it without the geometry needing to know the size.
-pub fn chart(state: &FeedState, key: &str, cx: &App) -> AnyElement {
+pub fn chart(state: &FeedState, key: &str, bars: usize, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
     let series: Vec<domain::Candle> =
         state.candles.get(key).map(|s| s.iter().cloned().collect()).unwrap_or_default();
@@ -266,7 +265,7 @@ pub fn chart(state: &FeedState, key: &str, cx: &App) -> AnyElement {
             .into_any_element();
     }
 
-    let view = chart_view(&series, CHART_BARS);
+    let view = chart_view(&series, bars);
 
     h_flex()
         .size_full()
@@ -277,11 +276,48 @@ pub fn chart(state: &FeedState, key: &str, cx: &App) -> AnyElement {
                 .flex_1()
                 .h_full()
                 .children(view.price_ticks.iter().map(|tick| gridline(tick.y, p.row_line)))
+                // The anchor line, drawn last so it sits over the grid: it is the zero of
+                // the percent axis and the only line worth picking out.
                 .children(view.last_y.map(|y| gridline(y, p.accent)))
                 .children(view.bars.iter().map(|bar| candle_marks(bar, cx)))
                 .into_any_element(),
         )
         .child(price_axis(&view, cx))
+        .child(percent_axis(&view, cx))
+        .into_any_element()
+}
+
+/// Percent gutter, outboard of the price gutter.
+///
+/// Zero sits on the last traded price, so every label reads as "how far from where the
+/// market is now" — the distance a scalper is actually sizing against.
+fn percent_axis(view: &ChartView, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+
+    let label = |y: f32, text: String, color: u32, weight: f32| {
+        div()
+            .absolute()
+            .top(relative(y))
+            .right_0()
+            .child(
+                MoonText::new(text).font_size(10.0).mono(true).uppercase(false).weight(weight).color(color),
+            )
+            .into_any_element()
+    };
+
+    div()
+        .relative()
+        .w(px(PCT_W))
+        .h_full()
+        .children(
+            view.price_ticks
+                .iter()
+                // The anchor gets its own emphatic label below; skip the grid tick that
+                // lands on top of it rather than printing two numbers in one place.
+                .filter(|t| t.percent.abs() > rust_decimal::Decimal::new(5, 3))
+                .map(|t| label(t.y, format!("{:+.2}%", t.percent), p.text_dim, 400.0)),
+        )
+        .children(view.last_y.map(|y| label(y, "0.00%".into(), p.accent, 700.0)))
         .into_any_element()
 }
 

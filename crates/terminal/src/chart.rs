@@ -35,6 +35,8 @@ pub struct PriceTick {
     pub price: Decimal,
     /// 0..1 from the top.
     pub y: f32,
+    /// Distance from the anchor in percent, signed. Zero exactly at the anchor.
+    pub percent: Decimal,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -48,6 +50,13 @@ pub struct ChartView {
     pub last: Option<Decimal>,
     /// Where the last close sits, 0..1 from the top.
     pub last_y: Option<f32>,
+    /// What the percent axis is measured from.
+    ///
+    /// The last traded price, so `0.00%` marks where the market is right now and every
+    /// other label reads as "how far from here" — the question a scalper is actually
+    /// asking. Anchoring to the middle of the visible range instead would put zero in a
+    /// place with no meaning.
+    pub anchor: Option<Decimal>,
 }
 
 /// Lay out the most recent `visible` candles.
@@ -91,14 +100,30 @@ pub fn chart_view(candles: &[Candle], visible: usize) -> ChartView {
         .collect();
 
     let last = shown.last().map(|c| c.close);
+    let percent_of = |price: Decimal| percent(price, last);
 
     ChartView {
         bars,
-        price_ticks: ticks(high, low).into_iter().map(|p| PriceTick { price: p, y: y_of(p) }).collect(),
+        price_ticks: ticks(high, low)
+            .into_iter()
+            .map(|p| PriceTick { price: p, y: y_of(p), percent: percent_of(p) })
+            .collect(),
         high,
         low,
         last,
         last_y: last.map(y_of),
+        anchor: last,
+    }
+}
+
+/// Signed distance from the anchor, in percent.
+///
+/// No anchor, or an anchor of zero, yields zero rather than an infinity that would render
+/// as `inf%` across the whole axis.
+pub fn percent(price: Decimal, anchor: Option<Decimal>) -> Decimal {
+    match anchor {
+        Some(anchor) if !anchor.is_zero() => (price - anchor) / anchor * Decimal::ONE_HUNDRED,
+        _ => Decimal::ZERO,
     }
 }
 
@@ -189,7 +214,8 @@ mod tests {
         Candle {
             symbol: Symbol::new(ExchangeId::Binance, MarketKind::Spot, "BTCUSDT"),
             open_time: Timestamp::from_millis(open_time),
-            interval_ms: 1_000,
+            bucketing: domain::Bucketing::Ticks { count: 25 },
+            trades: 1,
             open,
             high,
             low,
@@ -297,6 +323,42 @@ mod tests {
         }
         // Readable labels, not 62947.3163.
         assert!(view.price_ticks.iter().any(|t| t.price.normalize().scale() <= 1));
+    }
+
+    #[test]
+    fn zero_percent_falls_exactly_on_the_last_price() {
+        // The anchor is the whole point of the axis: every other label reads as distance
+        // from where the market is now.
+        let view = chart_view(&series(), 3);
+        assert_eq!(view.anchor, Some(dec!(101)));
+
+        assert_eq!(percent(dec!(101), view.anchor), Decimal::ZERO);
+        assert!(percent(dec!(102), view.anchor) > Decimal::ZERO);
+        assert!(percent(dec!(100), view.anchor) < Decimal::ZERO);
+    }
+
+    #[test]
+    fn every_gridline_carries_its_distance_from_the_anchor() {
+        let view = chart_view(&series(), 3);
+        for tick in &view.price_ticks {
+            let expected = percent(tick.price, view.anchor);
+            assert_eq!(tick.percent, expected, "price and percent must describe the same line");
+        }
+    }
+
+    #[test]
+    fn percent_against_a_missing_or_zero_anchor_is_zero_not_infinity() {
+        // An `inf%` label down the whole axis is worse than a wrong one.
+        assert_eq!(percent(dec!(100), None), Decimal::ZERO);
+        assert_eq!(percent(dec!(100), Some(Decimal::ZERO)), Decimal::ZERO);
+    }
+
+    #[test]
+    fn the_percentages_are_the_arithmetic_a_trader_would_check() {
+        // 1% above 100 is 101, and the sign says which way.
+        assert_eq!(percent(dec!(101), Some(dec!(100))).round_dp(4), dec!(1));
+        assert_eq!(percent(dec!(99), Some(dec!(100))).round_dp(4), dec!(-1));
+        assert_eq!(percent(dec!(63630), Some(dec!(63000))).round_dp(2), dec!(1));
     }
 
     #[test]

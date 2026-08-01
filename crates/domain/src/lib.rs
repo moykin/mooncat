@@ -23,7 +23,7 @@ pub use account::{Balance, MarginMode, Position};
 pub use event::{AccountEvent, ConnectionEvent, Event, MarketEvent, Payload};
 pub use ids::{ExchangeId, MarketKind, Symbol};
 pub use instrument::{Instrument, OrderCheck};
-pub use market::{ApplyOutcome, BookDelta, BookLevel, Candle, OrderBook, PublicTrade};
+pub use market::{ApplyOutcome, BookDelta, BookLevel, Bucketing, Candle, OrderBook, PublicTrade};
 pub use order::{
     ClientOrderId, Fill, NewOrder, Order, OrderStatus, OrderType, PositionSide, Side, TimeInForce,
 };

@@ -8,7 +8,7 @@
 //! flat one — a gap on the chart is the truth, and inventing a bar to fill it hides exactly
 //! the illiquidity a scalper is looking for.
 
-use domain::{Candle, PublicTrade, Symbol, Timestamp};
+use domain::{Bucketing, Candle, PublicTrade, Symbol};
 use std::collections::{HashMap, VecDeque};
 
 /// Candles retained per instrument.
@@ -28,61 +28,72 @@ pub enum Update {
 /// Live candle series, one per instrument.
 #[derive(Debug)]
 pub struct CandleSet {
-    interval_ms: i64,
+    bucketing: Bucketing,
     capacity: usize,
     series: HashMap<String, VecDeque<Candle>>,
 }
 
 impl CandleSet {
-    /// `interval_ms` must be positive; anything else would put every trade in one bucket.
-    pub fn new(interval_ms: i64, capacity: usize) -> Self {
-        Self { interval_ms: interval_ms.max(1), capacity: capacity.max(1), series: HashMap::new() }
+    /// Degenerate bucketing — a non-positive interval or a zero tick count — is clamped
+    /// rather than rejected: either would otherwise fold the whole session into one bar.
+    pub fn new(bucketing: Bucketing, capacity: usize) -> Self {
+        let bucketing = match bucketing {
+            Bucketing::Time { interval_ms } => Bucketing::Time { interval_ms: interval_ms.max(1) },
+            Bucketing::Ticks { count } => Bucketing::Ticks { count: count.max(1) },
+        };
+        Self { bucketing, capacity: capacity.max(1), series: HashMap::new() }
     }
 
-    pub fn interval_ms(&self) -> i64 {
-        self.interval_ms
+    pub fn bucketing(&self) -> Bucketing {
+        self.bucketing
     }
 
-    /// Fold one trade into its bucket.
+    /// Fold one trade into its bar.
     pub fn on_trade(&mut self, trade: &PublicTrade) -> Update {
-        let open_time = self.bucket(trade.ts);
-        let interval_ms = self.interval_ms;
-        let capacity = self.capacity;
+        match self.bucketing {
+            Bucketing::Time { interval_ms } => self.fold_time(trade, interval_ms),
+            Bucketing::Ticks { count } => self.fold_ticks(trade, count),
+        }
+    }
+
+    /// Time bars: the clock decides where one bar ends and the next begins.
+    fn fold_time(&mut self, trade: &PublicTrade, interval_ms: i64) -> Update {
+        let millis = trade.ts.millis();
+        let open_time = domain::Timestamp::from_millis(millis - millis.rem_euclid(interval_ms));
+        let (bucketing, capacity) = (self.bucketing, self.capacity);
         let series = self.series.entry(trade.symbol.key()).or_default();
 
         match series.back().map(|c| c.open_time) {
-            // A trade older than the forming candle would rewrite history that consumers
-            // have already drawn. Venues replay prints after a reconnect; drop them.
+            // A trade older than the forming bar would rewrite history consumers have
+            // already drawn. Venues replay prints after a reconnect; drop them.
             Some(current) if open_time < current => Update::Ignored,
-
-            Some(current) if open_time == current => {
-                let candle = series.back_mut().expect("checked above");
-                candle.high = candle.high.max(trade.price);
-                candle.low = candle.low.min(trade.price);
-                candle.close = trade.price;
-                candle.volume += trade.qty;
-                Update::Formed(candle.clone())
-            }
-
-            _ => {
-                let mut closed = None;
-                if let Some(previous) = series.back_mut() {
-                    previous.closed = true;
-                    closed = Some(previous.clone());
-                }
-
-                let opened = open(trade, open_time, interval_ms);
-                series.push_back(opened.clone());
-                while series.len() > capacity {
-                    series.pop_front();
-                }
-
-                match closed {
-                    Some(closed) => Update::Closed { closed, opened },
-                    None => Update::Formed(opened),
-                }
-            }
+            Some(current) if open_time == current => Update::Formed(extend(series, trade)),
+            _ => roll(series, trade, open_time, bucketing, capacity),
         }
+    }
+
+    /// Tick bars: the print count decides, and the clock says nothing.
+    ///
+    /// This is the difference the name promises. A quiet minute yields no bar at all, and a
+    /// burst yields several inside one second — the chart stretches where the activity is.
+    fn fold_ticks(&mut self, trade: &PublicTrade, count: u32) -> Update {
+        let (bucketing, capacity) = (self.bucketing, self.capacity);
+        let series = self.series.entry(trade.symbol.key()).or_default();
+
+        let room = series.back().is_some_and(|c| !c.closed && c.trades < count);
+        if room {
+            let candle = extend(series, trade);
+            // Filling the last slot ends the bar there and then, so consumers never see a
+            // finished bar still marked as forming.
+            if candle.trades >= count {
+                let closed = series.back_mut().expect("just extended");
+                closed.closed = true;
+                return Update::Formed(closed.clone());
+            }
+            return Update::Formed(candle);
+        }
+
+        roll(series, trade, trade.ts, bucketing, capacity)
     }
 
     /// Every candle for an instrument, oldest first.
@@ -115,30 +126,67 @@ impl CandleSet {
     pub fn clear(&mut self, symbol: &Symbol) {
         self.series.remove(&symbol.key());
     }
-
-    fn bucket(&self, ts: Timestamp) -> Timestamp {
-        Timestamp::from_millis(ts.millis() - ts.millis().rem_euclid(self.interval_ms))
-    }
 }
 
-fn open(trade: &PublicTrade, open_time: Timestamp, interval_ms: i64) -> Candle {
-    Candle {
+/// Fold a print into the bar currently forming.
+fn extend(series: &mut VecDeque<Candle>, trade: &PublicTrade) -> Candle {
+    let candle = series.back_mut().expect("caller checked there is one");
+    candle.high = candle.high.max(trade.price);
+    candle.low = candle.low.min(trade.price);
+    candle.close = trade.price;
+    candle.volume += trade.qty;
+    candle.trades += 1;
+    candle.clone()
+}
+
+/// Close whatever was forming and start a new bar on this print.
+fn roll(
+    series: &mut VecDeque<Candle>,
+    trade: &PublicTrade,
+    open_time: domain::Timestamp,
+    bucketing: Bucketing,
+    capacity: usize,
+) -> Update {
+    let mut closed = None;
+    if let Some(previous) = series.back_mut() {
+        if !previous.closed {
+            previous.closed = true;
+        }
+        closed = Some(previous.clone());
+    }
+
+    let mut opened = Candle {
         symbol: trade.symbol.clone(),
         open_time,
-        interval_ms,
+        bucketing,
+        trades: 1,
         open: trade.price,
         high: trade.price,
         low: trade.price,
         close: trade.price,
         volume: trade.qty,
         closed: false,
+    };
+    // A one-tick bar is complete the instant it exists; leaving it "forming" would have
+    // consumers redraw a bar that can never change again.
+    if let Bucketing::Ticks { count } = bucketing {
+        opened.closed = opened.trades >= count;
+    }
+    series.push_back(opened.clone());
+    while series.len() > capacity {
+        series.pop_front();
+    }
+
+    match closed {
+        Some(closed) => Update::Closed { closed, opened },
+        None => Update::Formed(opened),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{ExchangeId, MarketKind, Side};
+    use domain::{ExchangeId, MarketKind, Side, Timestamp};
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
@@ -158,7 +206,11 @@ mod tests {
     }
 
     fn set() -> CandleSet {
-        CandleSet::new(1_000, DEFAULT_CAPACITY)
+        CandleSet::new(Bucketing::Time { interval_ms: 1_000 }, DEFAULT_CAPACITY)
+    }
+
+    fn ticks(count: u32) -> CandleSet {
+        CandleSet::new(Bucketing::Ticks { count }, DEFAULT_CAPACITY)
     }
 
     #[test]
@@ -242,7 +294,7 @@ mod tests {
 
     #[test]
     fn the_ring_drops_the_oldest_candles() {
-        let mut candles = CandleSet::new(1_000, 3);
+        let mut candles = CandleSet::new(Bucketing::Time { interval_ms: 1_000 }, 3);
         for second in 0..6 {
             candles.on_trade(&trade(second * 1_000, dec!(100), dec!(1)));
         }
@@ -279,10 +331,84 @@ mod tests {
 
     #[test]
     fn a_zero_interval_is_clamped_rather_than_dividing_by_zero() {
-        let mut candles = CandleSet::new(0, 10);
-        assert_eq!(candles.interval_ms(), 1);
+        let mut candles = CandleSet::new(Bucketing::Time { interval_ms: 0 }, 10);
+        assert_eq!(candles.bucketing(), Bucketing::Time { interval_ms: 1 });
         candles.on_trade(&trade(1_500, dec!(100), dec!(1)));
         assert_eq!(candles.len(&sym().key()), 1);
+    }
+
+    #[test]
+    fn a_tick_bar_closes_on_the_print_count_not_the_clock() {
+        // The whole point of the name: five prints make a bar whether they land in one
+        // millisecond or across a minute.
+        let mut candles = ticks(5);
+        for n in 0..4 {
+            assert!(matches!(candles.on_trade(&trade(1_000 + n, dec!(100), dec!(1))), Update::Formed(_)));
+        }
+        assert_eq!(candles.len(&sym().key()), 1);
+
+        let Update::Formed(fifth) = candles.on_trade(&trade(9_999_999, dec!(101), dec!(1))) else {
+            panic!("the fifth print completes the bar");
+        };
+        assert!(fifth.closed, "a full bar is final the moment it fills");
+        assert_eq!(fifth.trades, 5);
+
+        // The sixth opens the next one, however long the wait was.
+        let Update::Closed { opened, .. } = candles.on_trade(&trade(9_999_999, dec!(102), dec!(1))) else {
+            panic!("expected a roll");
+        };
+        assert_eq!(opened.trades, 1);
+        assert_eq!(candles.len(&sym().key()), 2);
+    }
+
+    #[test]
+    fn tick_bars_compress_quiet_stretches_and_expand_bursts() {
+        // Six prints inside one millisecond make two bars; an hour of silence adds none.
+        // A one-second time chart would have produced one bar and then sixty empty seconds.
+        let mut candles = ticks(3);
+        for _ in 0..6 {
+            candles.on_trade(&trade(1_000, dec!(100), dec!(1)));
+        }
+        assert_eq!(candles.len(&sym().key()), 2, "activity, not elapsed time, cut these");
+
+        let times: Vec<i64> = candles.iter(&sym().key()).map(|c| c.open_time.millis()).collect();
+        assert_eq!(times, vec![1_000, 1_000], "both bars began in the same millisecond");
+    }
+
+    #[test]
+    fn a_tick_bar_records_how_many_prints_it_holds() {
+        let mut candles = ticks(10);
+        candles.on_trade(&trade(1_000, dec!(100), dec!(1)));
+        candles.on_trade(&trade(1_001, dec!(101), dec!(2)));
+
+        let bar = candles.forming(&sym().key()).unwrap();
+        assert_eq!(bar.trades, 2);
+        assert_eq!(bar.volume, dec!(3));
+        assert_eq!(bar.bucketing, Bucketing::Ticks { count: 10 });
+    }
+
+    #[test]
+    fn a_tick_count_of_one_makes_every_print_its_own_bar() {
+        let mut candles = ticks(1);
+        for n in 0..3 {
+            candles.on_trade(&trade(1_000 + n, dec!(100), dec!(1)));
+        }
+        assert_eq!(candles.len(&sym().key()), 3);
+        assert!(candles.iter(&sym().key()).all(|c| c.closed && c.trades == 1));
+    }
+
+    #[test]
+    fn a_zero_tick_count_is_clamped_rather_than_swallowing_the_session() {
+        let candles = CandleSet::new(Bucketing::Ticks { count: 0 }, 10);
+        assert_eq!(candles.bucketing(), Bucketing::Ticks { count: 1 });
+    }
+
+    #[test]
+    fn time_bars_also_count_their_prints() {
+        let mut candles = set();
+        candles.on_trade(&trade(1_000, dec!(100), dec!(1)));
+        candles.on_trade(&trade(1_500, dec!(101), dec!(1)));
+        assert_eq!(candles.forming(&sym().key()).unwrap().trades, 2);
     }
 
     #[test]

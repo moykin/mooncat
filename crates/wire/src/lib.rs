@@ -22,7 +22,7 @@ pub use session::{Auth, Session};
 
 /// Bumped whenever a message changes shape. Mismatched peers are rejected at Hello rather
 /// than left to misparse each other's frames later.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Terminal → core.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

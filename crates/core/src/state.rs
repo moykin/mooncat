@@ -208,7 +208,8 @@ mod tests {
             MarketEvent::Candle(Candle {
                 symbol: sym(MarketKind::Spot),
                 open_time: Timestamp::from_millis(open_time),
-                interval_ms: 1_000,
+                bucketing: domain::Bucketing::Ticks { count: 25 },
+                trades: 1,
                 open: dec!(100),
                 high: close.max(dec!(100)),
                 low: close.min(dec!(100)),

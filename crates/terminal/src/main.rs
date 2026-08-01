@@ -40,6 +40,9 @@ const MARKETS: [MarketKind; 2] = [MarketKind::Spot, MarketKind::LinearPerp];
 /// Order sizes offered on the toolbar, in quote currency.
 const SIZE_PRESETS: [&str; 6] = ["50", "100", "250", "500", "1000", "2500"];
 
+/// How many bars fit across the chart. Fewer bars is a closer look, not a different series.
+const ZOOM_PRESETS: [usize; 4] = [30, 60, 120, 240];
+
 /// Dock tabs, in the order they appear.
 const DOCK_TABS: [&str; 4] = ["Time & Sales", "Instruments", "Core Status", "Log"];
 
@@ -99,6 +102,7 @@ fn main() {
                     instrument: 0,
                     dock: 0,
                     size_preset: 1,
+                    zoom: 1,
                     frames: 0,
                     fps: 0.0,
                     sampled_at: Instant::now(),
@@ -124,6 +128,7 @@ struct TerminalView {
     instrument: usize,
     dock: usize,
     size_preset: usize,
+    zoom: usize,
     frames: u32,
     fps: f32,
     sampled_at: Instant,
@@ -149,7 +154,7 @@ impl Render for TerminalView {
                     .items_stretch()
                     .gap_2()
                     .px_2()
-                    .child(pane(panels::chart(&state, &key, cx), true, cx))
+                    .child(self.chart_pane(&state, &key, cx))
                     .child(div().w(px(432.0)).h_full().child(pane(
                         panels::order_book(&state, &key, cx),
                         false,
@@ -294,6 +299,66 @@ impl TerminalView {
                     cx.notify();
                 }))
         }))
+    }
+
+    /// The chart, with its own zoom strip above it.
+    ///
+    /// Zoom changes how many bars are shown, not which series is drawn — the bars themselves
+    /// are cut by print count in the core and do not change when you look closer.
+    fn chart_pane(&self, state: &FeedState, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let bars = ZOOM_PRESETS[self.zoom.min(ZOOM_PRESETS.len() - 1)];
+        let bucketing = state
+            .candles
+            .get(key)
+            .and_then(|s| s.back())
+            .map(|c| c.bucketing.label())
+            .unwrap_or_else(|| "—".into());
+
+        div().flex_1().h_full().child(
+            v_flex()
+                .size_full()
+                .p_3()
+                .gap_2()
+                .rounded_md()
+                .bg(rgba((p.panel << 8) | 0xFF))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            MoonText::new(bucketing)
+                                .font_size(10.0)
+                                .mono(true)
+                                .uppercase(false)
+                                .color(p.text_dim),
+                        )
+                        .child(div().flex_1())
+                        .child(MoonText::new("bars").font_size(10.0).color(p.text_dim).tracking(0.5))
+                        .children(ZOOM_PRESETS.iter().enumerate().map(|(index, count)| {
+                            let selected = index == self.zoom;
+                            div()
+                                .id(SharedString::from(format!("zoom-{count}")))
+                                .px_2()
+                                .rounded_sm()
+                                .bg(rgba(((if selected { p.accent } else { p.surface }) << 8) | 0xFF))
+                                .cursor_pointer()
+                                .child(
+                                    MoonText::new(count.to_string())
+                                        .font_size(10.0)
+                                        .mono(true)
+                                        .uppercase(false)
+                                        .color(if selected { p.accent_fg } else { p.text_muted }),
+                                )
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.zoom = index;
+                                    cx.notify();
+                                }))
+                        })),
+                )
+                .child(div().flex_1().w_full().child(panels::chart(state, key, bars, cx))),
+        )
     }
 
     fn dock(&self, state: &FeedState, key: &str, cx: &mut Context<Self>) -> impl IntoElement {

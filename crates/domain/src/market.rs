@@ -153,13 +153,45 @@ fn cmp_price(a: Decimal, b: Decimal, descending: bool) -> std::cmp::Ordering {
     }
 }
 
+/// How a candle series is cut into bars.
+///
+/// Time and tick bars answer different questions and neither substitutes for the other. A
+/// one-second bar says what happened in that second, including that nothing did; a
+/// twenty-five-tick bar always contains twenty-five prints, so quiet stretches compress and
+/// bursts expand. Scalping charts are usually tick-bucketed for exactly that reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Bucketing {
+    /// One bar per fixed slice of the clock.
+    Time { interval_ms: i64 },
+    /// One bar per fixed number of prints.
+    Ticks { count: u32 },
+}
+
+impl Bucketing {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Time { interval_ms } if *interval_ms % 60_000 == 0 => {
+                format!("{}m", interval_ms / 60_000)
+            }
+            Self::Time { interval_ms } if *interval_ms % 1_000 == 0 => {
+                format!("{}s", interval_ms / 1_000)
+            }
+            Self::Time { interval_ms } => format!("{interval_ms}ms"),
+            Self::Ticks { count } => format!("{count} ticks"),
+        }
+    }
+}
+
 /// A finished or forming candle.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candle {
     pub symbol: Symbol,
-    /// Candle open time.
+    /// Time of the bar's first print. For tick bars this is where it began, not a slot.
     pub open_time: Timestamp,
-    pub interval_ms: i64,
+    /// How this bar was cut.
+    pub bucketing: Bucketing,
+    /// Prints folded into this bar so far.
+    pub trades: u32,
     pub open: Decimal,
     pub high: Decimal,
     pub low: Decimal,
@@ -291,6 +323,14 @@ mod tests {
         let mut book = seeded();
         assert_eq!(book.apply(&delta(0, 10, vec![], vec![])), ApplyOutcome::Stale);
         assert_eq!(book.last_update_id, 10);
+    }
+
+    #[test]
+    fn bucketing_labels_read_the_way_a_trader_would_say_them() {
+        assert_eq!(Bucketing::Time { interval_ms: 1_000 }.label(), "1s");
+        assert_eq!(Bucketing::Time { interval_ms: 300_000 }.label(), "5m");
+        assert_eq!(Bucketing::Time { interval_ms: 250 }.label(), "250ms");
+        assert_eq!(Bucketing::Ticks { count: 25 }.label(), "25 ticks");
     }
 
     #[test]

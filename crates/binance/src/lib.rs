@@ -43,9 +43,12 @@ const STALENESS_CHECK: Duration = Duration::from_secs(5);
 /// A book silent for this long on a live socket is reported, not waited out.
 const STALE_AFTER_MS: i64 = 30_000;
 
-/// Candle bucket. One second, because the chart this feeds is a scalping chart and the
-/// venue's own klines start at a minute.
-const CANDLE_INTERVAL_MS: i64 = 1_000;
+/// Chart bars are cut by print count, not by the clock.
+///
+/// A scalping chart wants the axis to follow activity: twenty-five prints is twenty-five
+/// prints whether they land in a burst or over a minute, so quiet stretches compress and
+/// bursts open up. Time bars are still available — this is the one line that chooses.
+const CANDLE_BUCKETING: domain::Bucketing = domain::Bucketing::Ticks { count: 25 };
 
 /// Commands sent from the public API to the socket task.
 enum Command {
@@ -173,7 +176,7 @@ async fn socket_task(
     // Survives reconnects: the venue forgets our subscriptions, we do not.
     let mut active: BTreeSet<String> = BTreeSet::new();
     let mut books = BookSet::default();
-    let mut candles = CandleSet::new(CANDLE_INTERVAL_MS, marketdata::candles::DEFAULT_CAPACITY);
+    let mut candles = CandleSet::new(CANDLE_BUCKETING, marketdata::candles::DEFAULT_CAPACITY);
     let mut backoff = BACKOFF_START;
 
     loop {
