@@ -16,8 +16,10 @@ use tokio::net::TcpListener;
 use wire::Auth;
 
 mod config;
+mod metrics;
 mod server;
 mod state;
+mod tls;
 
 use config::Config;
 
@@ -27,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .init();
 
-    let config = Config::from_env(std::env::args().skip(1).collect())?;
+    let config = Config::load(std::env::args().skip(1).collect())?;
     let auth = Arc::new(Auth::new(config.token.clone()));
     let fanout = server::fanout();
     let state = state::MarketState::default();
@@ -35,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connectors publish into a plain channel; one pump forwards into the broadcast so that
     // a terminal that disconnects mid-event cannot stall a venue reader.
     let (sink, mut events) = exchange::event_channel();
+    let metrics = metrics::Metrics::new(sink.clone());
     let mut connectors = Vec::new();
 
     for market in &config.markets {
@@ -54,22 +57,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     keep_alive(connectors);
 
-    let (forward, folding) = (fanout.clone(), state.clone());
+    let (forward, folding, counting) = (fanout.clone(), state.clone(), metrics.clone());
     tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             // Fold before broadcasting, so a session subscribing at this instant is served
             // state that is at least as new as the events already queued for it.
             folding.apply(&event);
+            counting.event_broadcast();
             // An error here only means no terminal is connected, which is normal.
             let _ = forward.send(event);
         }
         tracing::warn!("connector event stream ended — no further market data");
     });
 
+    // The ops surface stays optional: a developer running the core on a laptop should not
+    // have to give up a second port to do it.
+    if let Some(addr) = config.metrics_bind {
+        let listener = TcpListener::bind(addr).await?;
+        tracing::info!(bind = %addr, "metrics and health on /metrics and /health");
+        tokio::spawn(metrics::serve(listener, metrics.clone()));
+    }
+
+    // Built before the socket opens: a certificate problem should stop the process here,
+    // where the operator is still watching the deploy, not at the first connection.
+    let acceptor = match &config.tls {
+        Some(t) => Some(tls::acceptor(&t.cert, &t.key)?),
+        None => None,
+    };
+
     let listener = TcpListener::bind(config.bind).await?;
-    tracing::info!(bind = %config.bind, "core is up");
+    tracing::info!(
+        bind = %config.bind,
+        scheme = if acceptor.is_some() { "wss" } else { "ws" },
+        "core is up"
+    );
     tokio::select! {
-        _ = server::serve(listener, auth, fanout, state) => {}
+        _ = server::serve(listener, auth, fanout, state, acceptor, metrics) => {}
         _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
     }
     Ok(())

@@ -61,7 +61,25 @@ make deliberately, alongside a firewall rule.
 | `core` | The `mooncore` binary: connectors, read-model, WebSocket server |
 | `terminal` | The `moonterm` window: order book, tape, instrument tabs |
 
-Planned: `oms`, `risk`, `strategy`, `storage`.
+Planned, in roadmap order: `storage`, `oms`, `risk`, `bybit`, `hyperliquid`, `features`,
+`reporting`, `screener`, `alerts`. No `strategy` crate — the strategy engine, backtester and
+tuner are out of scope by decision of 2026-08-02; see `../moon-plan/13-roadmap.md` §1.0.
+
+## What is not built yet
+
+Stated plainly, because the crate table above reads like more than there is.
+
+| Missing | Consequence today |
+|---|---|
+| **The entire order path** | `AccountEvent` has no producer and no `TradingVenue` is implemented. The core streams market data and nothing else — it cannot place, amend or cancel anything |
+| **TLS on the wire** | `MOON_TOKEN` crosses the network in the clear, so the core is only safe on loopback. This is why the default bind is `127.0.0.1` |
+| **Tests on `core/src/server.rs`** | The handshake, the start-of-session state handover and `Lagged` handling have zero coverage — 141 lines carrying the connection lifecycle |
+| **Priority separation in the fanout** | One `broadcast` of 8 192 carries everything. When executions start flowing they will queue behind book deltas, and the fix is much cheaper before that happens than after |
+| **Persistence** | Nothing is written to disk. Restarting the core loses the tape, the candles and the read-model |
+| **`std::mem::forget` in `main.rs`** | Connectors are leaked deliberately to keep their socket tasks alive. It works, but it means the core has no clean shutdown path |
+
+Planning documents — reverse-engineering reports, target architecture, protocol spec and the
+phased roadmap — live in `../moon-plan/`.
 
 ### Why `terminal` is a separate workspace
 
@@ -144,8 +162,14 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace                 # 91 tests
+cargo test --workspace                 # 155 tests
 cargo clippy --workspace --all-targets
 
-cd crates/terminal && cargo test      # 14 more, separate workspace
+cd crates/terminal && cargo test       # 41 more, separate workspace
+
+./ci/check-repo-size.sh                # build output must never re-enter the index
 ```
+
+The two counts above are checked by `crates/core/tests/readme.rs`, which parses this file and
+compares against the number of `#[test]` attributes in the tree. A README that drifts from the
+code is worse than no README, and this one had claimed 91 and 14 for several commits.

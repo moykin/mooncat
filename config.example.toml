@@ -1,0 +1,54 @@
+# mooncore configuration.
+#
+# Copy to config.toml and edit. Every key is optional; this file shows the defaults and the
+# two settings that matter on a real deployment.
+#
+#   cp config.example.toml config.toml
+#   cargo run -p core --bin mooncore
+#
+# Precedence is file > environment > default, so anything set here wins over MOON_* variables.
+# Positional arguments are tickers and beat `tickers` below:
+#
+#   cargo run -p core --bin mooncore -- --config /etc/mooncore/config.toml ETHUSDT SOLUSDT
+
+# Where terminals connect.
+#
+# Loopback by default. Binding anywhere else REQUIRES the [tls] section: the token is a
+# bearer credential, and the core refuses to start rather than put it on a network in the
+# clear. That refusal happens at startup, not at the first connection.
+bind = "127.0.0.1:8787"
+
+# Shared secret a terminal presents in Hello. At least 16 characters.
+#
+# Generate with:  openssl rand -hex 24
+#
+# On a VPS, prefer passing this as MOON_TOKEN through systemd's LoadCredentialEncrypted and
+# leaving it out of the file entirely — a config file gets copied into repositories, and a
+# credential store does not.
+# token = "…"
+
+# Instruments to stream, as the venue spells them.
+tickers = ["BTCUSDT"]
+
+# Markets to run connectors for: "spot", "linear_perp", "inverse_perp".
+markets = ["spot", "linear_perp"]
+
+# Prometheus /metrics and /health. Omit to serve neither.
+#
+# Kept on loopback here even when `bind` is public: scrape it through an SSH tunnel or a
+# reverse proxy rather than exposing the operational surface alongside the wire.
+# metrics_bind = "127.0.0.1:9090"
+
+# TLS. Required for any bind address that is not loopback.
+#
+# A self-signed certificate is the expected case — the terminal pins the public key rather
+# than validating a chain, so a CA buys nothing here. Generate one with:
+#
+#   openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+#       -subj "/CN=mooncore" \
+#       -keyout /etc/mooncore/key.pem -out /etc/mooncore/cert.pem
+#   chmod 600 /etc/mooncore/key.pem
+#
+# [tls]
+# cert = "/etc/mooncore/cert.pem"
+# key = "/etc/mooncore/key.pem"

@@ -1,0 +1,116 @@
+name: CI
+
+# The repository holds two workspaces that build very differently. The core is small, pure
+# Rust and fast; the terminal pulls a GPU toolkit from git and needs system libraries. They
+# are separate jobs so that a broken window backend never hides a broken order book, and so
+# that the fast feedback stays fast.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A CI failure has to be readable from the log alone; nobody attaches a debugger to it.
+  RUST_BACKTRACE: 1
+  # No incremental artifacts are reused between runs, so producing them is pure cost.
+  CARGO_INCREMENTAL: 0
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Cheapest check first: it needs no toolchain and catches the mistake that already cost
+  # this repository a 1.8 GiB history.
+  repo-hygiene:
+    name: repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The guard reads the pack size, which is meaningless in a shallow clone.
+          fetch-depth: 0
+      - run: ./ci/check-repo-size.sh
+
+  core:
+    name: core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the state of the other two.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The channel comes from rust-toolchain.toml — pinned, so a compiler release cannot
+      # turn a green build red on a day nobody touched the code.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: core-${{ matrix.os }}
+
+      - name: format
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        # `--all-targets` covers tests and examples; warnings are errors because a warning
+        # nobody has to fix is a warning everybody stops reading.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+  terminal:
+    name: terminal (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: crates/terminal
+    steps:
+      - uses: actions/checkout@v4
+
+      # GPUI links against the platform's windowing, font and audio stacks. On macOS and
+      # Windows these ship with the image; on Linux they do not, and the failure without them
+      # is a linker error naming a symbol rather than a missing package.
+      - name: system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxkbcommon-x11-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libwayland-dev libxkbcommon-dev \
+            libasound2-dev libfontconfig-dev libfreetype6-dev \
+            mesa-vulkan-drivers libvulkan-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.1"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/terminal
+          key: terminal-${{ matrix.os }}
+
+      - name: format
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        # The suite is windowless on purpose — chart geometry and book views are tested as
+        # arithmetic. Nothing here needs a display, so no virtual framebuffer is set up.
+        run: cargo test
