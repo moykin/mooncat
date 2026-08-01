@@ -43,6 +43,8 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 rustls-pemfile = "2"
 x509-parser = "0.18"
 sha2 = "0.10"
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+rand = "0.9"
 hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

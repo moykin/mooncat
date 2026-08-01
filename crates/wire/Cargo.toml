@@ -19,6 +19,8 @@ serde_bytes = { workspace = true }
 tokio-rustls = { workspace = true }
 x509-parser = { workspace = true }
 sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
 hex = { workspace = true }
 
 [dev-dependencies]
