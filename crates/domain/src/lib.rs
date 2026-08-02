@@ -17,6 +17,7 @@ pub mod ids;
 pub mod instrument;
 pub mod market;
 pub mod order;
+pub mod registry;
 pub mod time;
 
 pub use account::{Balance, MarginMode, Position};
@@ -27,6 +28,7 @@ pub use market::{ApplyOutcome, BookDelta, BookLevel, Bucketing, Candle, OrderBoo
 pub use order::{
     ClientOrderId, Fill, NewOrder, Order, OrderStatus, OrderType, PositionSide, Side, TimeInForce,
 };
+pub use registry::{ResolveError, SymbolId, SymbolRegistry};
 pub use time::Timestamp;
 
 pub use rust_decimal::Decimal;

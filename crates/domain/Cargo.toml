@@ -12,4 +12,5 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+rmp-serde = { workspace = true }
 rust_decimal_macros = { workspace = true }

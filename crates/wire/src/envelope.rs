@@ -31,14 +31,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// so that a retried command is not executed twice (task 1.7).
 pub type ReqId = u64;
 
-/// A symbol's short form within one `core_epoch`, handed out in the reply to a subscription.
-///
-/// Four bytes instead of the twenty-odd of `"binance:linear_perp:BTCUSDT"`, repeated on every
-/// delta of every book. The epoch is what makes reuse safe: ids from a previous core lifetime
-/// are refused rather than silently pointing at a different instrument.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SymbolId(pub u32);
+/// A symbol's short form. Defined in `domain` — it is a domain concept, and having two of
+/// them would be two things to keep in step.
+pub use domain::SymbolId;
 
 /// The schema version this build understands. Anything higher is skipped, not guessed at.
 pub const KNOWN_VER: u16 = 0;
