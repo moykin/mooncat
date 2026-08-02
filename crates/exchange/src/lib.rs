@@ -84,7 +84,9 @@ impl std::fmt::Debug for Credentials {
 /// What market data to stream for an instrument.
 ///
 /// Serialisable because a terminal asks for these across the wire.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// `Hash` so a session can hold a set of them: subscribing twice to the same stream must be
+/// the same subscription, not two.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Subscription {
     /// Public trade tape.
     Trades(Symbol),

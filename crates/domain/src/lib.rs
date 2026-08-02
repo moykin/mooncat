@@ -18,6 +18,7 @@ pub mod instrument;
 pub mod market;
 pub mod order;
 pub mod registry;
+pub mod scaled;
 pub mod time;
 
 pub use account::{Balance, MarginMode, Position};
@@ -29,6 +30,7 @@ pub use order::{
     ClientOrderId, Fill, NewOrder, Order, OrderStatus, OrderType, PositionSide, Side, TimeInForce,
 };
 pub use registry::{ResolveError, SymbolId, SymbolRegistry};
+pub use scaled::{ScaleError, Scaled, ScaledLevel};
 pub use time::Timestamp;
 
 pub use rust_decimal::Decimal;

@@ -29,6 +29,7 @@ pub mod keystore;
 pub mod pin;
 pub mod resume;
 pub mod session;
+pub mod subscription;
 
 pub use admission::{authorize, Admit, Gatekeeper, SessionId};
 pub use audit::{AuditRecord, Outcome};
@@ -48,6 +49,7 @@ pub use keystore::{EncryptedFile, Keystore, KeystoreError};
 pub use pin::{PinnedVerifier, SpkiPin};
 pub use resume::{Impossible, ResumeLog, Resumed, RESUME_WINDOW};
 pub use session::{Auth, Session};
+pub use subscription::{Assigned, Subscriptions};
 
 /// Bumped whenever a message changes shape. Mismatched peers are rejected at Hello rather
 /// than left to misparse each other's frames later.
