@@ -102,7 +102,7 @@ pub fn period_summary(
 pub fn unresolved_orders(connection: &Connection) -> Result<Vec<String>, rusqlite::Error> {
     let mut stmt = connection.prepare(
         "SELECT client_id FROM orders \
-         WHERE status NOT IN ('filled','cancelled','rejected','expired') \
+         WHERE status NOT IN ('filled','canceled','rejected','expired') \
          ORDER BY created_at",
     )?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
@@ -341,7 +341,7 @@ mod tests {
         store.write_durable(vec![order("c-1", "pending", 1)]).unwrap();
         store.write_durable(vec![order("c-2", "new", 2)]).unwrap();
         store.write_durable(vec![order("c-3", "filled", 3)]).unwrap();
-        store.write_durable(vec![order("c-4", "cancelled", 4)]).unwrap();
+        store.write_durable(vec![order("c-4", "canceled", 4)]).unwrap();
 
         let mut reader = Reader::open(&store).unwrap();
         let found = reader.snapshot(unresolved_orders).unwrap();
