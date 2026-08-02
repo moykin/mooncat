@@ -20,7 +20,9 @@ use tokio_rustls::TlsAcceptor;
 /// Every failure names the file and what was wrong with it. This runs on a VPS during a
 /// deploy, where the only diagnostic anyone will see is this string.
 pub fn acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor, String> {
-    install_crypto_provider();
+    // Belt and braces: `main` installs it for the whole process, and doing it here too costs
+    // nothing and keeps this function usable on its own.
+    wire::install_crypto_provider();
     let certs = load_certs(cert_path)?;
     let key = load_key(key_path)?;
 
@@ -33,21 +35,6 @@ pub fn acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor, String
     })?;
 
     Ok(TlsAcceptor::from(Arc::new(config)))
-}
-
-/// Pin the crypto backend explicitly.
-///
-/// Both `ring` and `aws-lc-rs` end up in the dependency graph — different crates in the tree
-/// ask for different ones — and rustls refuses to guess when it sees two. Left to chance this
-/// surfaces as a panic on the first TLS handshake, meaning at the first connection on the VPS
-/// rather than at startup here. `install_default` is idempotent by contract; a second call
-/// returns `Err` and that is not a problem.
-fn install_crypto_provider() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-    });
 }
 
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {

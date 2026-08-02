@@ -29,6 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .init();
 
+    // Before anything opens a TLS connection, inbound or outbound. Skipping it leaves the
+    // venue connectors dying on their first handshake while the core looks perfectly healthy.
+    wire::install_crypto_provider();
+
     let config = Config::load(std::env::args().skip(1).collect())?;
     let auth = Arc::new(Auth::new(config.token.clone()));
     let fanout = server::fanout();

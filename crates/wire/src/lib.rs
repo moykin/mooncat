@@ -14,6 +14,24 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Pin the TLS crypto backend for the whole process.
+///
+/// Must be called once, before anything opens a TLS connection in either direction. Both
+/// `ring` and `aws-lc-rs` end up in the dependency graph — different crates ask for different
+/// ones — and rustls refuses to guess when it sees two, panicking on the first handshake.
+///
+/// Learned by running the core rather than by testing it: the guard originally lived inside
+/// the server's TLS setup, which is only reached when a certificate is configured. On loopback
+/// there is none, so the *outbound* connection to the venue hit the ambiguity instead, the
+/// connector task died, and the core sat there with a healthy `/health` and no market data.
+pub fn install_crypto_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 pub mod admission;
 pub mod audit;
 pub mod auth;
