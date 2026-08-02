@@ -76,7 +76,7 @@ fn graph() -> BTreeMap<String, BTreeSet<String>> {
 }
 
 /// Crates of this project, as opposed to third-party ones.
-const OURS: &[&str] = &["domain", "exchange", "marketdata", "binance", "wire", "core", "terminal"];
+const OURS: &[&str] = &["domain", "exchange", "marketdata", "binance", "wire", "storage", "core", "terminal"];
 
 #[test]
 fn the_workspace_contains_what_this_test_thinks_it_does() {
@@ -123,6 +123,17 @@ fn the_terminal_cannot_reach_an_exchange() {
     // What it may share with the core is exactly the vocabulary and the protocol.
     for allowed in ["domain", "wire", "exchange"] {
         assert!(deps.contains(allowed), "the terminal is expected to use {allowed}");
+    }
+}
+
+#[test]
+fn storage_knows_the_vocabulary_and_nothing_else() {
+    // It writes domain types to disk. If it could see `wire`, the database schema would start
+    // being shaped by the protocol — and the two change for entirely different reasons.
+    let deps = &graph()["storage"];
+    assert!(deps.contains("domain"), "storage persists domain types");
+    for forbidden in ["wire", "core", "exchange", "binance", "marketdata"] {
+        assert!(!deps.contains(forbidden), "storage must not depend on {forbidden}");
     }
 }
 

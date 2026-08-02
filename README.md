@@ -58,10 +58,11 @@ make deliberately, alongside a firewall rule.
 | `marketdata` | Book maintenance: snapshot attachment, gap recovery, staleness |
 | `binance` | Spot and USD-M perpetuals behind one implementation |
 | `wire` | The core↔terminal protocol: messages, framing, session rules |
+| `storage` | Durable state: one writer, a bounded queue, an ack that means committed |
 | `core` | The `mooncore` binary: connectors, read-model, WebSocket server |
 | `terminal` | The `moonterm` window: order book, tape, instrument tabs |
 
-Planned, in roadmap order: `storage`, `oms`, `risk`, `bybit`, `hyperliquid`, `features`,
+Planned, in roadmap order: `oms`, `risk`, `bybit`, `hyperliquid`, `features`,
 `reporting`, `screener`, `alerts`. No `strategy` crate — the strategy engine, backtester and
 tuner are out of scope by decision of 2026-08-02; see `../moon-plan/13-roadmap.md` §1.0.
 
@@ -165,7 +166,7 @@ fair to study and reimplement; its source files are not fair to copy.
 ## Build
 
 ```bash
-cargo test --workspace                 # 447 tests
+cargo test --workspace                 # 465 tests
 cargo clippy --workspace --all-targets
 
 cd crates/terminal && cargo test       # 41 more, separate workspace

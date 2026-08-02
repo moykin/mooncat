@@ -1,0 +1,18 @@
+[package]
+name = "storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Durable state: deals, orders, fills, candles and the audit trail."
+
+[dependencies]
+domain = { workspace = true }
+
+rusqlite = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rust_decimal_macros = { workspace = true }
