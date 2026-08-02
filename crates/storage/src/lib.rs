@@ -7,8 +7,12 @@
 //! The one thing to read before changing anything here is [`store`]: its writer discipline is
 //! copied wholesale from MoonTerminal, where it was arrived at the expensive way.
 
+pub mod read;
+pub mod retention;
 pub mod schema;
 pub mod store;
 
+pub use read::{PeriodSummary, Reader};
+pub use retention::{sweep, Policy, Swept};
 pub use schema::{MigrationError, Migrator};
 pub use store::{Store, StoreError, Value, Write, WriteAck};

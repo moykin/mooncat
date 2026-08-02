@@ -2489,6 +2489,7 @@ version = "0.1.0"
 dependencies = [
  "domain",
  "rusqlite",
+ "rust_decimal",
  "rust_decimal_macros",
  "serde",
  "thiserror",

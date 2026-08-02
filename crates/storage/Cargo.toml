@@ -10,6 +10,7 @@ description = "Durable state: deals, orders, fills, candles and the audit trail.
 domain = { workspace = true }
 
 rusqlite = { workspace = true }
+rust_decimal = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
