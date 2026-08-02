@@ -14,8 +14,12 @@ use domain::{
     Position, Symbol,
 };
 
+pub mod caps;
+pub mod limits;
 pub mod sink;
 
+pub use caps::Caps;
+pub use limits::{Decision, Kind, Profile, RateLimiter};
 pub use sink::EventSink;
 
 /// What a connector can fail with.
