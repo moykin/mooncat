@@ -52,6 +52,13 @@ fn main() {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
         .init();
 
+    // The terminal's graph currently holds one crypto provider, so this is redundant today.
+    // It is here because that is an accident of the dependency tree rather than a decision:
+    // one new dependency pulling a second provider makes rustls refuse to choose, and the
+    // failure lands on the first `wss://` handshake rather than at build time. The core lost
+    // its market data feed to exactly this.
+    wire::install_crypto_provider();
+
     let Ok(token) = std::env::var("MOON_TOKEN") else {
         eprintln!("set MOON_TOKEN to the core's token");
         std::process::exit(1);
