@@ -83,8 +83,23 @@ impl From<rusqlite::Error> for StoreError {
 /// integers only: this is a queue, not a query builder, and anything that needs richer types
 /// converts before it gets here.
 pub struct Write {
-    pub sql: &'static str,
+    /// Borrowed for the statements that run millions of times, owned for the handful that are
+    /// built at runtime — schema migrations. A plain `String` would clone a long statement on
+    /// every fill; a plain `&'static str` would force a leak to express a migration.
+    pub sql: std::borrow::Cow<'static, str>,
     pub params: Vec<Value>,
+}
+
+impl Write {
+    /// The common case: a statement known at compile time.
+    pub fn new(sql: &'static str, params: Vec<Value>) -> Self {
+        Self { sql: std::borrow::Cow::Borrowed(sql), params }
+    }
+
+    /// Built at runtime. Used by migrations and nothing on the hot path.
+    pub fn owned(sql: String, params: Vec<Value>) -> Self {
+        Self { sql: std::borrow::Cow::Owned(sql), params }
+    }
 }
 
 /// What a parameter can be. Deliberately small.
@@ -297,7 +312,16 @@ fn commit(connection: &Connection, batch: &[Job]) -> Result<(), rusqlite::Error>
     connection.execute_batch("BEGIN IMMEDIATE")?;
     for job in batch {
         for write in &job.writes {
-            if let Err(e) = connection.execute(write.sql, rusqlite::params_from_iter(&write.params)) {
+            // A write with no parameters may be a script of several statements — that is what
+            // a schema migration is. `execute` runs only the first one and silently ignores
+            // the rest, which produced a database with one table and a recorded version
+            // claiming six. `execute_batch` runs all of them.
+            let outcome = if write.params.is_empty() {
+                connection.execute_batch(&write.sql)
+            } else {
+                connection.execute(&write.sql, rusqlite::params_from_iter(&write.params)).map(|_| ())
+            };
+            if let Err(e) = outcome {
                 // One bad statement must not commit the good ones alongside it: a partial
                 // batch is a state nobody designed and nobody can reason about.
                 let _ = connection.execute_batch("ROLLBACK");
@@ -362,16 +386,16 @@ mod tests {
         let dir = TempDir::new(tag);
         let store = Store::open(dir.db()).expect("opens");
         store
-            .write_durable(vec![Write {
-                sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
-                params: vec![],
-            }])
+            .write_durable(vec![Write::new(
+                "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
+                vec![],
+            )])
             .expect("schema");
         (dir, store)
     }
 
     fn insert(v: &str) -> Write {
-        Write { sql: "INSERT INTO t (v) VALUES (?1)", params: vec![Value::Text(v.into())] }
+        Write::new("INSERT INTO t (v) VALUES (?1)", vec![Value::Text(v.into())])
     }
 
     fn count(store: &Store) -> i64 {
@@ -422,10 +446,10 @@ mod tests {
         {
             let store = Store::open(dir.db()).unwrap();
             store
-                .write_durable(vec![Write {
-                    sql: "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
-                    params: vec![],
-                }])
+                .write_durable(vec![Write::new(
+                    "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
+                    vec![],
+                )])
                 .unwrap();
             store.write_durable(vec![insert("survives")]).unwrap();
         }
@@ -442,10 +466,10 @@ mod tests {
         {
             let store = Store::open(dir.db()).unwrap();
             store
-                .write_durable(vec![Write {
-                    sql: "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
-                    params: vec![],
-                }])
+                .write_durable(vec![Write::new(
+                    "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)",
+                    vec![],
+                )])
                 .unwrap();
             for i in 0..1_000 {
                 store.write(vec![insert(&format!("r{i}"))]).unwrap();
@@ -498,7 +522,7 @@ mod tests {
 
         let bad = store.write(vec![
             insert("good"),
-            Write { sql: "INSERT INTO nonexistent (v) VALUES (?1)", params: vec![Value::Int(1)] },
+            Write::new("INSERT INTO nonexistent (v) VALUES (?1)", vec![Value::Int(1)]),
         ]);
         assert!(bad.unwrap().wait().is_err(), "the batch must fail");
         assert_eq!(count(&store), 1, "the good statement must not have committed alone");
@@ -507,7 +531,7 @@ mod tests {
     #[test]
     fn a_failure_is_reported_to_the_caller_not_swallowed() {
         let (_dir, store) = opened("report");
-        let err = store.write_durable(vec![Write { sql: "THIS IS NOT SQL", params: vec![] }]).unwrap_err();
+        let err = store.write_durable(vec![Write::new("THIS IS NOT SQL", vec![])]).unwrap_err();
         assert!(matches!(err, StoreError::Sqlite(_)), "got {err:?}");
     }
 
@@ -515,7 +539,7 @@ mod tests {
     fn writing_to_a_closed_store_is_an_error_rather_than_a_hang() {
         let dir = TempDir::new("closed");
         let store = Store::open(dir.db()).unwrap();
-        let ack = store.write(vec![Write { sql: "SELECT 1", params: vec![] }]).unwrap();
+        let ack = store.write(vec![Write::new("SELECT 1", vec![])]).unwrap();
         drop(store);
         // The write either committed before shutdown or reports the store is gone; it must
         // never block forever.
@@ -595,10 +619,10 @@ mod tests {
         // here would undo every careful decision upstream.
         let (_dir, store) = opened("money");
         store
-            .write_durable(vec![Write {
-                sql: "INSERT INTO t (v) VALUES (?1)",
-                params: vec![Value::Text("63096.01000000".into())],
-            }])
+            .write_durable(vec![Write::new(
+                "INSERT INTO t (v) VALUES (?1)",
+                vec![Value::Text("63096.01000000".into())],
+            )])
             .unwrap();
 
         let back: String = store.reader().unwrap().query_row("SELECT v FROM t", [], |r| r.get(0)).unwrap();
@@ -609,22 +633,22 @@ mod tests {
     fn every_value_kind_round_trips() {
         let (_dir, store) = opened("values");
         store
-            .write_durable(vec![Write {
-                sql: "CREATE TABLE v (i INTEGER, r REAL, t TEXT, b BLOB, n TEXT)",
-                params: vec![],
-            }])
+            .write_durable(vec![Write::new(
+                "CREATE TABLE v (i INTEGER, r REAL, t TEXT, b BLOB, n TEXT)",
+                vec![],
+            )])
             .unwrap();
         store
-            .write_durable(vec![Write {
-                sql: "INSERT INTO v VALUES (?1, ?2, ?3, ?4, ?5)",
-                params: vec![
+            .write_durable(vec![Write::new(
+                "INSERT INTO v VALUES (?1, ?2, ?3, ?4, ?5)",
+                vec![
                     Value::Int(-42),
                     Value::Real(1.5),
                     Value::Text("text".into()),
                     Value::Blob(vec![1, 2, 3]),
                     Value::Null,
                 ],
-            }])
+            )])
             .unwrap();
 
         let reader = store.reader().unwrap();

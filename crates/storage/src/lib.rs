@@ -7,6 +7,8 @@
 //! The one thing to read before changing anything here is [`store`]: its writer discipline is
 //! copied wholesale from MoonTerminal, where it was arrived at the expensive way.
 
+pub mod schema;
 pub mod store;
 
-pub use store::{Store, StoreError, WriteAck};
+pub use schema::{MigrationError, Migrator};
+pub use store::{Store, StoreError, Value, Write, WriteAck};
